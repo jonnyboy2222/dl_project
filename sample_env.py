@@ -4,12 +4,12 @@ import numpy as np
 import random
 
 # 환경 파라미터
-WIDTH, HEIGHT = 800, 600
+WIDTH, HEIGHT = 800, 1000
 FPS = 30
 
 # 색상
 WHITE = (255, 255, 255)
-GRAY = (200, 200, 200)
+GRAY = (100, 100, 100)
 BLUE = (50, 150, 255)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
@@ -69,7 +69,7 @@ class Car:
         # 1. 원본 Surface 생성 (길이 x 폭)
         original_surface = pygame.Surface((self.length, self.width), pygame.SRCALPHA)  # 투명 배경
         # 2. 자동차 몸체 색상 채우기
-        original_surface.fill((0, 0, 0))
+        original_surface.fill(GRAY)
         # 2.1. 자동차 헤드라이트 그리기
         # 헤드라이트 크기 및 위치 설정
         headlight_depth = int(self.length * 0.08)  # 헤드라이트의 깊이 (자동차 길이 방향)
@@ -131,7 +131,7 @@ class Environment:
         self.all_obstacles = []
 
     def reset(self):
-        self.car = Car(400, 550)
+        self.car = Car(400, 700)
         # 잠재적인 슬롯 위치를 섞어서 랜덤하게 선택
         shuffled_slots = random.sample(self.potential_slots, len(self.potential_slots))
         self.goal = shuffled_slots[0] # 첫 번째 슬롯을 목표로 설정
@@ -165,8 +165,8 @@ class Environment:
 
         # 경계 충돌 체크 (화면 밖으로 나가는 경우)
         if not pygame.Rect(0, 0, WIDTH, HEIGHT).contains(car_bounding_rect):
-                reward = -10
-                done = True
+            reward = -10
+            done = True
         
         # for obs in self.obstacles2:
         #     if car_rect.colliderect(obs):
@@ -179,34 +179,47 @@ class Environment:
         #         done = True
 
         return self.car.get_state(), reward, done
+    
+    def draw_parked_cars(self, screen):
+        for i, slot in enumerate(self.potential_slots):
+            if slot != self.goal and slot not in self.all_obstacles:
+                # 차량을 슬롯에 반쯤 채워서 표시
+                car_width, car_length = 45, 90
+                car_rect = pygame.Rect(
+                    slot.centerx - car_length // 2,
+                    slot.centery - car_width // 2,
+                    car_length,
+                    car_width
+                )
+                pygame.draw.rect(screen, BLUE, car_rect)
+
+    def draw_tree(self, screen, x, y):
+        pygame.draw.rect(screen, (139, 69, 19), (x + 10, y + 20, 20, 30))  # tree trunk
+        pygame.draw.circle(screen, (34, 139, 34), (x + 20, y + 20), 20)    # tree leaves
+
 
     def render(self, screen):
-        screen.fill((230, 230, 230))
-        
-        # for i in range(3):
-        #     pygame.draw.rect(screen, (180, 180, 180), (50, 100 + i*120, 110, 70))  # 왼쪽
-        #     pygame.draw.rect(screen, (180, 180, 180), (screen.get_width() - 130, 100 + i*120, 110, 70))  # 오른쪽
+        screen.fill((60, 60, 60))  # 도로 바닥
+        pygame.draw.rect(screen, (34, 139, 34), (0, 0, WIDTH, 50))  # 윗쪽 잔디
+        pygame.draw.rect(screen, (34, 139, 34), (0, HEIGHT - 50, WIDTH, 50))  # 아랫쪽 잔디
 
-        # 모든 잠재적 주차 슬롯 라인 그리기
+        for i in range(0, WIDTH, 40):
+            pygame.draw.rect(screen, (169, 169, 169), (i, HEIGHT - 60, 30, 10))  # 연석
+
         for slot in self.potential_slots:
-             pygame.draw.rect(screen, GRAY, slot)
-
-        # 랜덤하게 선택된 목표 및 장애물 그리기
+            pygame.draw.rect(screen, (100, 100, 100), slot)
+            pygame.draw.rect(screen, WHITE, slot, 2)  # 주차선
 
         pygame.draw.rect(screen, GREEN, self.goal)
-
-        # for obs in self.obstacles1:
         for obs in self.all_obstacles:
             pygame.draw.rect(screen, RED, obs)
 
-        # for obs in self.obstacles2:
-        #     pygame.draw.rect(screen, RED, obs)
-
-        # for obs in self.obstacles3:
-        #     pygame.draw.rect(screen, RED, obs)
-
+        self.draw_parked_cars(screen)
+        self.draw_tree(screen, 40, 30)
+        self.draw_tree(screen, WIDTH - 70, 30)
         self.car.draw(screen)
         pygame.display.flip()
+
 
 # 디버깅용 실행 코드
 if __name__ == '__main__':
@@ -235,6 +248,7 @@ if __name__ == '__main__':
 
         if done:
             print("Episode finished. Reward:", reward)
+            
             state = env.reset()
 
     pygame.quit()
