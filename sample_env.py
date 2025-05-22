@@ -178,7 +178,7 @@ class Environment:
         #         reward = -10
         #         done = True
 
-        return self.car.get_state(), reward, done
+        return self.car.get_state(), self.reward, done
     
     def draw_parked_cars(self, screen):
         for i, slot in enumerate(self.potential_slots):
@@ -218,8 +218,7 @@ class Environment:
         self.draw_tree(screen, 40, 30)
         self.draw_tree(screen, WIDTH - 70, 30)
         self.car.draw(screen)
-        pygame.display.flip()
-
+        # pygame.display.flip()
 
 # 디버깅용 실행 코드
 if __name__ == '__main__':
@@ -228,7 +227,22 @@ if __name__ == '__main__':
     clock = pygame.time.Clock()
 
     env = Environment()
+    episode_count = 1
+    reward = env.get_reward()
     state = env.reset()
+
+    game_over_state = False
+    display_message = ""
+    
+    # 폰트 설정
+    try:
+        font = pygame.font.Font(None, 48) # 기본 폰트, 크기 48
+        small_font = pygame.font.Font(None, 36) # 기본 폰트, 크기 36
+    except pygame.error:
+        print("Pygame font not available, using system default.")
+        font = pygame.font.SysFont("arial", 48)
+        small_font = pygame.font.SysFont("arial", 36)
+
 
     running = True
     while running:
@@ -237,19 +251,53 @@ if __name__ == '__main__':
             if event.type == pygame.QUIT:
                 running = False
 
-        # 키보드 조작 테스트용
-        keys = pygame.key.get_pressed()
-        steer = (keys[pygame.K_RIGHT] - keys[pygame.K_LEFT])
-        throttle = (keys[pygame.K_UP] - keys[pygame.K_DOWN])
+        # # 키보드 조작 테스트용
+        # keys = pygame.key.get_pressed()
+        # steer = (keys[pygame.K_RIGHT] - keys[pygame.K_LEFT])
+        # throttle = (keys[pygame.K_UP] - keys[pygame.K_DOWN])
 
-        action = [steer, throttle]
-        state, reward, done = env.step(action)
+        # action = [steer, throttle]
+        # state, reward, done = env.step(action)
+            if game_over_state and event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE or event.key == pygame.K_RETURN:
+                    state = env.reset()
+                    episode_count += 1
+                    game_over_state = False
+                    display_message = ""
+
+        if not game_over_state:
+            # 키보드 조작 테스트용
+            keys = pygame.key.get_pressed()
+            steer = (keys[pygame.K_RIGHT] - keys[pygame.K_LEFT])
+            throttle = (keys[pygame.K_UP] - keys[pygame.K_DOWN])
+            action = [steer, throttle]
+            state, reward, done = env.step(action)
+
+            if done:
+                game_over_state = True
+                if reward > 0: # Goal reached
+                    display_message = f"Goal Reached! Reward: {reward:.2f}. Press SPACE to restart."
+                else: # Collision or out of bounds
+                    display_message = f"Collision! Reward: {reward:.2f}. Press SPACE to restart."
+                print(f"Episode {episode_count} finished. {display_message}")
+
+        # 화면 렌더링
         env.render(screen)
 
-        if done:
-            print("Episode finished. Reward:", reward)
+        # if done:
+        #     print("Episode finished. Reward:", reward)
             
-            state = env.reset()
+        #     state = env.reset()
+        # 에피소드 카운트 표시
+        episode_text_surface = small_font.render(f"Episode: {episode_count}", True, WHITE)
+        screen.blit(episode_text_surface, (10, 10))
+
+        if game_over_state:
+            message_surface = font.render(display_message, True, WHITE, (0,0,0,128)) # Text, antialias, color, background (optional, semi-transparent black)
+            message_rect = message_surface.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+            screen.blit(message_surface, message_rect)
+
+        pygame.display.flip()
 
     pygame.quit()
     exit()
