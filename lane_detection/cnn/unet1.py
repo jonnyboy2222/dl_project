@@ -19,9 +19,37 @@ class UNet(nn.Module):
         )
         self.pool2 = nn.MaxPool2d(2)
 
-        self.bottleneck = nn.Sequential(
-            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU()
+        self.enc3 = nn.Sequential(
+            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(),
+            nn.Conv2d(128, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(),
+            nn.Dropout2d(p=dropout_p)
         )
+        self.pool3 = nn.MaxPool2d(2)
+
+        self.enc4 = nn.Sequential(
+            nn.Conv2d(128, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(),
+            nn.Dropout2d(p=dropout_p)
+        )
+        self.pool4 = nn.MaxPool2d(2)
+
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU()
+        )
+
+        self.up4 = nn.ConvTranspose2d(512, 256, 2, stride=2)
+        self.dec4 = nn.Sequential(
+            nn.Conv2d(512, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(),
+            nn.Dropout2d(p=dropout_p)
+        )
+
+        self.up3 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.dec3 = nn.Sequential(
+            nn.Conv2d(256, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(),
+            nn.Conv2d(128, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(),
+            nn.Dropout2d(p=dropout_p)
+        )        
 
         self.up2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
         self.dec2 = nn.Sequential(
@@ -46,7 +74,21 @@ class UNet(nn.Module):
         enc2 = self.enc2(x)
         x = self.pool2(enc2)
 
+        enc3 = self.enc3(x)
+        x = self.pool3(enc3)
+
+        enc4 = self.enc4(x)
+        x = self.pool4(enc4)
+
         x = self.bottleneck(x)
+
+        x = self.up4(x)
+        x = torch.cat([x, enc4], dim=1)
+        x = self.dec4(x)
+
+        x = self.up3(x)
+        x = torch.cat([x, enc3], dim=1)
+        x = self.dec3(x)
 
         x = self.up2(x)
         x = torch.cat([x, enc2], dim=1)
