@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 import torch.optim as optim
 from lane_dataset import LaneDataset
-from unet import UNet
+from unet1 import UNet
 from mixed_loss import mixed_loss
 from tqdm import tqdm
 import os
@@ -14,9 +14,9 @@ from iou import compute_iou
 
 
 # 경로 설정
-TRAIN_LIST = "SDLane/train/train_list.txt"
-TRAIN_IMAGES = "SDLane/train/resized_images"
-TRAIN_MASKS = "SDLane/train/resized_masks"
+TRAIN_LIST = "lane_detection/cnn/SDLane/train/train_list.txt"
+TRAIN_IMAGES = "lane_detection/cnn/SDLane/train/resized_images"
+TRAIN_MASKS = "lane_detection/cnn/SDLane/train/resized_masks"
 SAVE_PATH = "best_model.pth"
 
 # 전체 dataset 생성
@@ -63,7 +63,8 @@ for epoch in range(num_epochs):
         images, masks = images.to(device), masks.to(device)
         optimizer.zero_grad()
         outputs = model(images)
-        loss = mixed_loss(outputs, masks)
+        # loss = mixed_loss(outputs, masks)
+        loss = F.cross_entropy(outputs, masks)
         loss.backward()
         optimizer.step()
         train_loss += loss.item()
@@ -80,7 +81,8 @@ for epoch in range(num_epochs):
         for images, masks in tqdm(val_loader):
             images, masks = images.to(device), masks.to(device)
             outputs = model(images)
-            loss = mixed_loss(outputs, masks)
+            # loss = mixed_loss(outputs, masks)
+            loss = F.cross_entropy(outputs, masks)
             val_loss += loss.item()
 
             # === IoU 계산 ===
