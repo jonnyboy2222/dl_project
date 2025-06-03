@@ -34,7 +34,8 @@ class UNet(nn.Module):
         self.pool4 = nn.MaxPool2d(2)
 
         self.bottleneck = nn.Sequential(
-            nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU()
+            nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(),
+            nn.Dropout2d(p=dropout_p)
         )
 
         self.up4 = nn.ConvTranspose2d(512, 256, 2, stride=2)
