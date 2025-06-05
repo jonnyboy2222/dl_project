@@ -4,8 +4,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 import torch.optim as optim
 from lane_dataset import LaneDataset
-from unet1 import UNet
+from unet2 import UNet
 from mixed_loss import mixed_loss
+from mixed_loss2 import FocalTverskyLoss
 from tqdm import tqdm
 import os
 from torch.amp import autocast
@@ -14,9 +15,9 @@ from iou import compute_iou
 
 
 # 경로 설정
-TRAIN_LIST = "lane_detection/cnn/SDLane/train/train_list.txt"
-TRAIN_IMAGES = "lane_detection/cnn/SDLane/train/resized_images"
-TRAIN_MASKS = "lane_detection/cnn/SDLane/train/resized_masks"
+TRAIN_LIST = "SDLane/train/train_list.txt"
+TRAIN_IMAGES = "SDLane/train/resized_images"
+TRAIN_MASKS = "SDLane/train/resized_masks"
 SAVE_PATH = "best_model.pth"
 
 # 전체 dataset 생성
@@ -42,14 +43,19 @@ optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
 
 # AMP (자동 mixed precision) 설정 (선택)
+# float 16 연산 보조 클래스
+# 표현 범위가 작아 작은 값이 0이 되거나 nan이 될 수 있는데 그것을 방지
 scaler = torch.amp.GradScaler(device="cuda")
 
 print(f"Train size: {len(train_set)}, Validation size: {len(val_set)}")
 
 
 # 학습 루프
-num_epochs = 5
+num_epochs = 40
 best_val_loss = float("inf")
+
+epochs_no_improve = 0
+early_stop_patience = 10
 
 train_losses = []
 val_losses = []
@@ -62,11 +68,25 @@ for epoch in range(num_epochs):
     for images, masks in tqdm(train_loader):
         images, masks = images.to(device), masks.to(device)
         optimizer.zero_grad()
-        outputs = model(images)
-        # loss = mixed_loss(outputs, masks)
-        loss = F.cross_entropy(outputs, masks)
-        loss.backward()
-        optimizer.step()
+
+        with autocast(device_type="cuda"): # 모델과 loss 계산을 자동으로 float16으로 수행
+            outputs = model(images)
+            loss = mixed_loss(outputs, masks) # focal + dice loss
+
+        scaler.scale(loss).backward() # 작은 값이 float16에서 underflow 나는 걸 방지
+        scaler.step(optimizer)
+        scaler.update()
+
+        # Cross Entropy
+        # loss = F.cross_entropy(outputs, masks) 
+
+        # Focal Tversky Loss
+        # criterion = FocalTverskyLoss()           # Loss 함수 객체 생성
+        # loss = criterion(outputs, masks)         # forward()로 호출
+
+        # loss.backward()
+        # optimizer.step()
+
         train_loss += loss.item()
 
     train_loss /= len(train_loader)
@@ -80,9 +100,11 @@ for epoch in range(num_epochs):
         print(f"[Epoch : {epoch+1}] Validating...")
         for images, masks in tqdm(val_loader):
             images, masks = images.to(device), masks.to(device)
+
             outputs = model(images)
-            # loss = mixed_loss(outputs, masks)
-            loss = F.cross_entropy(outputs, masks)
+            # loss = criterion(outputs, masks)
+            loss = mixed_loss(outputs, masks)
+            # loss = F.cross_entropy(outputs, masks)
             val_loss += loss.item()
 
             # === IoU 계산 ===
@@ -90,15 +112,29 @@ for epoch in range(num_epochs):
             iou_scores.append(batch_ious)
 
     val_loss /= len(val_loader)
-    avg_iou = torch.tensor(iou_scores).nanmean(dim=0)  # class별 평균 IoU
+    scheduler.step(val_loss)
+
+    ious_tensor = torch.stack([torch.tensor(i) for i in iou_scores]) # iou_scores는 리스트
+    avg_iou = ious_tensor.nanmean(dim=0)  # class별 평균 IoU
     mean_iou = avg_iou.nanmean().item()  # 전체 클래스 평균
     print(f"Mean IoU: {mean_iou}")
 
     # === 모델 저장 ===
     if val_loss < best_val_loss:
         best_val_loss = val_loss
+        epochs_no_improve = 0
         torch.save(model.state_dict(), "best_model.pth")
         print(f"Model improved and saved at epoch {epoch+1}!")
+    else:
+        epochs_no_improve += 1
+        print(f"No improvement for {epochs_no_improve} epoch(s).")
+
+    # === Early stopping 조건 체크 ===
+    if epochs_no_improve >= early_stop_patience:
+        print(f"Early stopping triggered at epoch {epoch+1}")
+        break
+
+
 
     # === 로그 출력 ===
     print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")

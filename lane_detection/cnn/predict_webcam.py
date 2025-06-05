@@ -4,17 +4,16 @@ import numpy as np
 from unet2 import UNet
 from skimage.morphology import skeletonize
 
-def predict_video(model_path, input_video_path, output_video_path, input_size=(512, 256), show_live=True):
+def predict_webcam(model_path, input_size=(512, 256), save_output=False, output_path="webcam_output.mp4"):
     """
-    영상에 대한 세그멘테이션 마스크를 프레임마다 예측하고, 마스크 영상 저장
+    웹캠 실시간 차선 세그멘테이션 추론 함수
 
     Args:
         model_path (str): 학습된 모델의 경로 (.pth)
-        input_video_path (str): 입력 영상 경로
-        output_video_path (str): 저장할 출력 영상 경로
         input_size (tuple): 모델 입력 사이즈 (width, height)
+        save_output (bool): 웹캠 영상 저장 여부
+        output_path (str): 저장할 영상 경로
     """
-
     # ===== 모델 로딩 =====
     model = UNet(num_classes=3)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -22,17 +21,19 @@ def predict_video(model_path, input_video_path, output_video_path, input_size=(5
     model = model.to(device)
     model.eval()
 
-    # ===== 영상 열기 =====
-    cap = cv2.VideoCapture(input_video_path)
+    # ===== 웹캠 열기 =====
+    cap = cv2.VideoCapture(0)  # 기본 카메라
     if not cap.isOpened():
-        raise FileNotFoundError(f"영상을 열 수 없습니다: {input_video_path}")
+        raise RuntimeError("웹캠을 열 수 없습니다")
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_video_path, fourcc, fps, frame_size)
+    # 저장 옵션 (선택)
+    if save_output:
+        fps = 20.0  # 웹캠에 따라 적절히 설정
+        w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
 
-    print("영상 추론 시작...")
+    print("웹캠 추론 시작 (ESC 키로 종료)...")
 
     # 초기화
     prev_angle = 0.0
@@ -44,9 +45,9 @@ def predict_video(model_path, input_video_path, output_video_path, input_size=(5
     while True:
         ret, frame = cap.read()
         if not ret:
+            print("웹캠 프레임을 읽을 수 없습니다.")
             break
 
-        # 원본 프레임 보존
         original_frame = frame.copy()
 
         # 전처리
@@ -54,10 +55,11 @@ def predict_video(model_path, input_video_path, output_video_path, input_size=(5
         img_resized = cv2.resize(img_rgb, input_size)
         img_tensor = torch.from_numpy(img_resized / 255.0).float().permute(2, 0, 1).unsqueeze(0).to(device)
 
-        # 추론
         with torch.no_grad():
             output = model(img_tensor)
             pred_mask = torch.argmax(output, dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
+
+
 
         # --- Skeleton 기반 중앙선 추정 ---
         h, w = pred_mask.shape
@@ -104,14 +106,13 @@ def predict_video(model_path, input_video_path, output_video_path, input_size=(5
         else:
             print("중심선 추출 실패")
 
-        # 마스크 컬러화
+        # 시각화
         in_h, in_w = input_size[1], input_size[0]
         color_mask = np.zeros((in_h, in_w, 3), dtype=np.uint8)
         color_mask[pred_mask == 1] = [0, 255, 0]     # 좌차선 - 초록
         color_mask[pred_mask == 2] = [0, 0, 255]     # 우차선 - 빨강
         color_mask[skeleton] = [255, 255, 0]         # 중앙선 - 노랑
 
-        # 마스크와 원본 합성 (alpha blending)
         color_mask_resized = cv2.resize(color_mask, (frame.shape[1], frame.shape[0]))
         overlay = cv2.addWeighted(original_frame, 0.7, color_mask_resized, 0.3, 0)
 
@@ -125,19 +126,18 @@ def predict_video(model_path, input_video_path, output_video_path, input_size=(5
             cv2.line(overlay, (cx, cy_bottom), (cx, cy_top), (255, 255, 0), 2)
         cv2.line(overlay, (frame.shape[1]//2, frame.shape[0]), (frame.shape[1]//2, int(frame.shape[0]*0.5)), (0, 255, 255), 1)
 
-        # 저장
-        out.write(overlay)
+        cv2.imshow("Webcam Segmentation", overlay)
 
-        # 실시간 디스플레이
-        if show_live:
-            cv2.imshow("Segmentation", overlay)
-            if cv2.waitKey(1) & 0xFF == 27:  # ESC 누르면 종료
-                print("ESC 누름 → 영상 중단")
-                break
+        if save_output:
+            out.write(overlay)
+
+        if cv2.waitKey(1) & 0xFF == 27:
+            print("ESC 누름 → 종료")
+            break
 
     cap.release()
-    out.release()
+    if save_output:
+        out.release()
+    cv2.destroyAllWindows()
 
-    if show_live:
-        cv2.destroyAllWindows() 
-    print(f"저장 완료: {output_video_path}")
+predict_webcam("best_model_final.pth")

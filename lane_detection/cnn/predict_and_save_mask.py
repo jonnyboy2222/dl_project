@@ -1,7 +1,7 @@
 import torch
 import cv2
 import numpy as np
-from unet import UNet
+from unet1 import UNet
 
 def predict_and_save_mask(model_path, input_image_path, output_mask_path, input_size=(512, 256)):
     """
