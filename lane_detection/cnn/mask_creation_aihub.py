@@ -4,6 +4,12 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
+# [원천]c_1280_720_daylight_train_1-002.tar
+# [원천]c_1280_720_daylight_train_8-001.tar
+
+# [원천]c_1280_720_daylight_train_5-001.tar
+# [원천]c_1280_720_daylight_train_6-002.tar
+
 # 경로 설정
 train_root = os.path.abspath("ai_hub_dataset/train")
 images_dir = os.path.join(train_root, "images")

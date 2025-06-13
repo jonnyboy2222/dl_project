@@ -3,10 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 import torch.optim as optim
-from lane_dataset import LaneDataset
+# from lane_dataset_sdlane import LaneDataset
+from lane_dataset_aihub import LaneDataset
 from unet2 import UNet
 from mixed_loss import mixed_loss
-from mixed_loss2 import FocalTverskyLoss
+# from mixed_loss2 import FocalTverskyLoss
 from tqdm import tqdm
 import os
 from torch.amp import autocast
@@ -15,10 +16,19 @@ from iou import compute_iou
 
 
 # 경로 설정
-TRAIN_LIST = "SDLane/train/train_list.txt"
-TRAIN_IMAGES = "SDLane/train/resized_images"
-TRAIN_MASKS = "SDLane/train/resized_masks"
+# TRAIN_LIST = "SDLane/train/train_list.txt"
+# TRAIN_IMAGES = "SDLane/train/resized_images"
+# TRAIN_MASKS = "SDLane/train/resized_masks"
+# SAVE_PATH = "best_model.pth"
+
+TRAIN_LIST = "ai_hub_dataset/train/train_list.txt"
+TRAIN_IMAGES = "ai_hub_dataset/train/resized_images"
+TRAIN_MASKS = "ai_hub_dataset/train/resized_masks"
 SAVE_PATH = "best_model.pth"
+
+os.makedirs("loss_result", exist_ok=True)
+
+
 
 # 전체 dataset 생성
 dataset = LaneDataset(TRAIN_LIST, TRAIN_IMAGES, TRAIN_MASKS)
@@ -37,7 +47,7 @@ val_loader = DataLoader(val_set, batch_size=8, shuffle=False, num_workers=4)
 
 # 모델 및 학습 설정
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = UNet(num_classes=3).to(device)
+model = UNet(num_classes=6).to(device)
 
 optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
@@ -51,7 +61,7 @@ print(f"Train size: {len(train_set)}, Validation size: {len(val_set)}")
 
 
 # 학습 루프
-num_epochs = 40
+num_epochs = 50
 best_val_loss = float("inf")
 
 epochs_no_improve = 0
@@ -59,6 +69,8 @@ early_stop_patience = 10
 
 train_losses = []
 val_losses = []
+miou_list = []
+per_class_iou_list = [[] for _ in range(6)]  # 클래스 수에 맞게 설정
 
 for epoch in range(num_epochs):
     model.train()
@@ -108,7 +120,7 @@ for epoch in range(num_epochs):
             val_loss += loss.item()
 
             # === IoU 계산 ===
-            batch_ious = compute_iou(outputs, masks, num_classes=3)  # 클래스 수 맞게 설정
+            batch_ious = compute_iou(outputs, masks, num_classes=6)  # 클래스 수 맞게 설정
             iou_scores.append(batch_ious)
 
     val_loss /= len(val_loader)
@@ -118,6 +130,17 @@ for epoch in range(num_epochs):
     avg_iou = ious_tensor.nanmean(dim=0)  # class별 평균 IoU
     mean_iou = avg_iou.nanmean().item()  # 전체 클래스 평균
     print(f"Mean IoU: {mean_iou}")
+    
+    class_names = ["background", "white_solid", "white_dotted", "yellow_solid", "stop_line", "crosswalk"]
+
+    for i, iou in enumerate(avg_iou):
+        name = class_names[i] if i < len(class_names) else f"Class {i}"
+        print(f"{name:12}: {iou:.4f}")
+
+    # 리스트에 저장
+    miou_list.append(mean_iou)
+    for i, iou in enumerate(avg_iou):
+        per_class_iou_list[i].append(iou.item())
 
     # === 모델 저장 ===
     if val_loss < best_val_loss:
@@ -146,6 +169,8 @@ print("학습 완료!")
 
 # === 시각화 ===
 
+# === Loss ===
+plt.figure()
 plt.plot(train_losses, label="Train Loss")
 plt.plot(val_losses, label="Val Loss")
 plt.xlabel("Epoch")
@@ -154,4 +179,27 @@ plt.legend()
 plt.title("Training vs Validation Loss")
 plt.grid(True)
 plt.savefig("./loss_result/loss_plot.png")
-plt.show()
+plt.close()
+
+# === mIoU ===
+plt.figure()
+plt.plot(miou_list, label="Mean IoU", color="black")
+plt.xlabel("Epoch")
+plt.ylabel("mIoU")
+plt.title("Mean IoU over Epochs")
+plt.grid(True)
+plt.legend()
+plt.savefig("./loss_result/miou_plot.png")
+plt.close()
+
+# === Class-wise IoU ===
+plt.figure(figsize=(10, 6))
+for i, class_iou in enumerate(per_class_iou_list):
+    plt.plot(class_iou, label=class_names[i])
+plt.xlabel("Epoch")
+plt.ylabel("Class IoU")
+plt.title("Class-wise IoU over Epochs")
+plt.legend()
+plt.grid(True)
+plt.savefig("./loss_result/class_iou_plot.png")
+plt.close()
