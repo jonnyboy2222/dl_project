@@ -13,153 +13,160 @@ from PyQt6.QtGui import *
 from PyQt6.QtCore import *
 from PyQt6 import uic
 
+from threading import Lock
+
 # 서버 IP 및 포트 정보
 LANE_SERVER_IP = "192.168.0.252"
 TCP_LANE_PORT = 12345
 UDP_LANE_PORT = 54321
 
-OBJ_SERVER_IP = "192.168.2.102"
+OBJ_SERVER_IP = "192.168.0.102"
 TCP_OBJ_PORT = 12346
 UDP_OBJ_PORT = 54322
 
+latest_frame = None
+latest_lane_result = None
+frame_lock = Lock()
+json_lock = Lock()
+
+
 from_class = uic.loadUiType("/home/lee/dev_ws/projects/DL_project/gui/client_video.ui")[0]
 
-class TcpLaneClientThread(QThread):
-    msg_lane = pyqtSignal(str)
-
+class UdpSender():
     def __init__(self):
-        super().__init__()
-        self.running = True
+        self.udp_lane = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.udp_obj = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    def run(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            try:
-                client.connect((LANE_SERVER_IP, TCP_LANE_PORT))
-                client.settimeout(1.0)
-
-                buffer = b""
-                expected_size = 10
-
-                while self.running:
-                    try:
-                        data = client.recv(1024)
-                        if not data:
-                            continue
-
-                        buffer += data
-
-                        while len(buffer) >= expected_size:
-                            uuid, angle, n_points = struct.unpack('>I f H', buffer)
-                            header_str = uuid.decode('ascii')
-                            angle_float = float(angle)
-                            n_points_int = int(n_points)
-
-                            parsed_msg = f"[{header_str} Angle:{angle_float:.2f}, N_Points:{n_points_int}]"
-                            print(parsed_msg)
-                            self.msg_lane.emit(parsed_msg)
-                            
-                    except socket.timeout:
-                        continue
-            except Exception as e:
-                print(f"[TCP LANE ERROR] {e}")
-
-    def stop(self):
-        self.running = False
-        self.wait()
-
-
-class TcpObjClientThread(QThread):
-    msg_obj = pyqtSignal(str)
-
-    def __init__(self):
-        super().__init__()
-        self.running = True
-
-    def run(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            try:
-                client.connect((OBJ_SERVER_IP, TCP_OBJ_PORT))
-                client.settimeout(1.0)
-
-                buffer = b""
-                expected_size = 16
-
-                while self.running:
-                    try:
-                        data = client.recv(1024)
-                        if not data:
-                            continue
-
-                        buffer += data
-
-                        while len(buffer) >= expected_size:
-                            chunk = buffer[:expected_size]
-                            buffer = buffer[expected_size:]
-
-                            header, value, flag = struct.unpack('>4s f B', chunk)
-                            header_str = header.decode('ascii')
-
-                            parsed_msg = f"[{header_str} Value:{value:.2f}, Flag:{flag}]"
-                            print(parsed_msg)
-                            self.msg_obj.emit(parsed_msg)
-
-                    except socket.timeout:
-                        continue
-            except Exception as e:
-                print(f"[TCP OBJ ERROR] {e}")
-
-    def stop(self):
-        self.running = False
-        self.wait()
-
-
-class UdpSenderThread(QThread):
-    frame_from_lane = pyqtSignal(np.ndarray)
-    frame_from_obj = pyqtSignal(np.ndarray)
-
-    def __init__(self):
-        super().__init__()
-        self.running = True
         self.uuid_counter = 0
 
-    def run(self):
-        cap = cv2.VideoCapture('/home/lee/dev_ws/projects/DL_project/lane_detect/UFLDv2_like/video/example.mp4')
-        if not cap.isOpened():
-            print("[UDP] Webcam open failed")
-            return
+    def send_frame(self):
+        global latest_frame, frame_lock
 
-        udp_lane = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        udp_obj = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.cap = cv2.VideoCapture(0)
 
-        while self.running:
-            ret, frame = cap.read()
-            if not ret:
-                continue
+        try:
+            if not self.cap.isOpened():
+                print("[UDP] Webcam open failed")
+                return
 
-            frame = cv2.resize(frame, (640, 480))
-            ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
-            if not ret:
-                continue
+            while True:
+                self.uuid_counter += 1
+                uuid_msg = self.uuid_counter.to_bytes(4, byteorder='big')
 
-            self.uuid_counter += 1
-            uuid_msg = self.uuid_counter.to_bytes(4, byteorder='big')
-            print(self.uuid_counter,uuid_msg)
+                ret, frame = self.cap.read()
 
+                frame = cv2.resize(frame, (640, 480))
+
+                with frame_lock:
+                    latest_frame = frame.copy()
+
+                if not ret:
+                    continue
+                
+                ret, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+                if not ret:
+                    continue
+
+                try:
+                    self.udp_lane.sendto(uuid_msg + b'||' + buffer.tobytes(), (LANE_SERVER_IP, UDP_LANE_PORT))
+                    self.udp_obj.sendto(uuid_msg + b'||' + buffer.tobytes(), (OBJ_SERVER_IP, UDP_OBJ_PORT))
+                except Exception as e:
+                    print(f"[UDP SEND ERROR] {e}")
+        finally:
+            self.cap.release()
+
+
+    def close(self):
+        self.udp_lane.close()
+        self.udp_obj.close()
+        self.cap.release()
+
+
+
+class TcpLaneReceiver():
+    def __init__(self):
+        self.tcp_lane = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.tcp_lane.connect((LANE_SERVER_IP, TCP_LANE_PORT))
+        self.tcp_lane.settimeout(1.0)
+
+    def receive_data(self):
+        global latest_lane_result, json_lock
+        while True:
             try:
-                udp_lane.sendto(uuid_msg + b'||' + buffer.tobytes(), (LANE_SERVER_IP, UDP_LANE_PORT))
-                udp_obj.sendto(uuid_msg + b'||' + buffer.tobytes(), (OBJ_SERVER_IP, UDP_OBJ_PORT))
+                # 먼저 4바이트 헤더 읽기
+                header = self.tcp_lane.recv(4)
+                if len(header) < 4:
+                    raise ValueError("Incomplete header")
+
+                json_len = struct.unpack('>I', header)[0]
+
+                # 정확히 그 길이만큼 받기
+                buffer = b''
+                while len(buffer) < json_len:
+                    chunk = self.tcp_lane.recv(json_len - len(buffer))
+                    if not chunk:
+                        raise ConnectionError("Socket closed unexpectedly")
+                    buffer += chunk
+
+                json_data = json.loads(buffer.decode('utf-8'))
+
+                with json_lock:
+                    latest_lane_result = json_data
+                
+                return json_data
+            
             except Exception as e:
-                print(f"[UDP SEND ERROR] {e}")
+                print(f"[TCP LANE RECEIVE ERROR] {e}")
+                return None
+            
+    def close(self):
+        if self.tcp_lane is not None:
+            self.tcp_lane.close()
+            self.tcp_lane = None
+            
+class TcpObjReceiver():
+    def __init__(self):
+        self.tcp_obj = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.tcp_obj.connect((OBJ_SERVER_IP, TCP_OBJ_PORT))
+        self.tcp_obj.settimeout(1.0)
 
-            # 단순히 현재 프레임 표시용
-            self.frame_from_lane.emit(frame)
-            self.frame_from_obj.emit(frame)
-            self.msleep(33)
+    def receive_data(self):
+        while True:
+            try:
+                # 먼저 4바이트 헤더 읽기
+                header = self.tcp_obj.recv(4)
+                if len(header) < 4:
+                    raise ValueError("Incomplete header")
 
-        cap.release()
+                json_len = struct.unpack('>I', header)[0]
 
-    def stop(self):
-        self.running = False
+                # 정확히 그 길이만큼 받기
+                buffer = b''
+                while len(buffer) < json_len:
+                    chunk = self.tcp_obj.recv(json_len - len(buffer))
+                    if not chunk:
+                        raise ConnectionError("Socket closed unexpectedly")
+                    buffer += chunk
+
+                json_data = json.loads(buffer.decode('utf-8'))
+                
+                return json_data
+            
+            except Exception as e:
+                print(f"[TCP OBJ RECEIVE ERROR] {e}")
+                return None
+            
+    def close(self):
+        if self.tcp_obj is not None:
+            self.tcp_obj.close()
+            self.tcp_obj = None
+
+
+
+
+
+
+
 
 
 class WindowClass(QMainWindow, from_class):
@@ -168,94 +175,79 @@ class WindowClass(QMainWindow, from_class):
         self.setupUi(self)
         self.setWindowTitle("COVA II")
 
-        self.tcp_lane_client = TcpLaneClientThread()
-        self.tcp_obj_client = TcpObjClientThread()
-        self.udp_sender = UdpSenderThread()
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_video_gui)
+        self.timer.start(33)  # ~30fps
 
-        self.tcp_lane_client.msg_lane.connect(self.update_lane_msg)
-        self.tcp_obj_client.msg_obj.connect(self.update_obj_msg)
-        self.udp_sender.frame_from_lane.connect(self.update_video_lane)
-        # self.udp_sender.frame_from_obj.connect(self.update_video_obj)
+    def draw_result_on_frame(self, frame, result_json):
+        if not frame.any():
+            return frame
 
-        self.tcp_lane_client.start()
-        self.tcp_obj_client.start()
-        self.udp_sender.start()
+        annotated = frame.copy()
+        try:
+            if "center_line" in result_json:
+                pts = result_json["center_line"]
+                for i in range(len(pts) - 1):
+                    pt1 = tuple(pts[i])
+                    pt2 = tuple(pts[i + 1])
+                    cv2.line(annotated, pt1, pt2, (0, 255, 255), 2)  # Yellow
 
-    def update_lane_msg(self, msg):
-        self.label_msg_lane.setText("Lane: " + msg)
+            if "lanes" in result_json:
+                for lane in result_json["lanes"]:
+                    lane_pts = lane["points"]
+                    color = (255, 0, 0) if lane["class_name"] == "white_solid" else (0, 255, 0)
+                    for i in range(len(lane_pts) - 1):
+                        pt1 = tuple(lane_pts[i])
+                        pt2 = tuple(lane_pts[i + 1])
+                        cv2.line(annotated, pt1, pt2, color, 2)
 
-    def update_obj_msg(self, msg):
-        self.label_msg_obj.setText("Object: " + msg)
+            angle = result_json.get("steering_angle", 0.0)
+            cv2.putText(annotated, f"Steering Angle: {angle:.2f}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-    def update_video_lane(self, frame):
+        except Exception as e:
+            print(f"[DRAW ERROR] {e}")
+
+        return annotated
+    
+    def update_video_gui(self):
+        global latest_frame, latest_lane_result, frame_lock, json_lock
+
+        with frame_lock:
+            if latest_frame is None:
+                return
+            frame = latest_frame.copy()
+
+        with json_lock:
+            result = latest_lane_result
+
+        if result is not None:
+            frame = self.draw_result_on_frame(frame, result)
+            angle = result.get("steering_angle", 0.0)
+            self.label_msg_lane.setText(f"Angle: {angle:.2f}")
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         bytes_per_line = ch * w
         img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
         pixmap = QPixmap.fromImage(img)
-        self.label_video_lane.setPixmap(pixmap.scaled(self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
+        self.label_video_lane.setPixmap(pixmap.scaled(
+            self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
 
-    # def update_video_obj(self, frame):
-    #     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    #     h, w, ch = rgb.shape
-    #     bytes_per_line = ch * w
-    #     img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-    #     pixmap = QPixmap.fromImage(img)
-    #     self.label_video_obj.setPixmap(pixmap.scaled(self.label_video_obj.width(), self.label_video_obj.height(), Qt.AspectRatioMode.KeepAspectRatio))
+
 
 # Main
 if __name__ == "__main__":
+    udp_sender = UdpSender()
+    tcp_lane_receiver = TcpLaneReceiver()
+    tcp_obj_receiver = TcpObjReceiver()
+
+    threading.Thread(target=udp_sender.send_frame, daemon=True).start()
+    threading.Thread(target=tcp_lane_receiver.receive_data, daemon=True).start()
+    threading.Thread(target=tcp_obj_receiver.receive_data, daemon=True).start()
+
+
     app = QApplication(sys.argv)
     myWindows = WindowClass()
     myWindows.show()
     sys.exit(app.exec())
-
-
-# class TcpClientThread(QThread):
-#     msg_lane = pyqtSignal(str)
-#     msg_obj = pyqtSignal(str)
-
-#     def __init__(self):
-#         super().__init__()
-#         self.running = True
-
-#     def run(self):
-#         while self.running:
-#             threading.Thread(target=self.tcp_lane_listener).start()
-#             threading.Thread(target=self.tcp_obj_listener).start()
-#             break
-
-#     def tcp_lane_listener(self):
-#         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-#             try:
-#                 client.connect((LANE_SERVER_IP, TCP_LANE_PORT))
-#                 client.settimeout(1.0)
-#                 while self.running:
-#                     try:
-#                         data = client.recv(1024)
-#                         if data:
-#                             msg = json.loads(data.decode('utf-8')) # byte buffer로 수정
-#                             self.msg_lane.emit(str(msg))
-#                     except socket.timeout:
-#                         continue
-#             except Exception as e:
-#                 print(f"[TCP LANE ERROR] {e}")
-
-#     def tcp_obj_listener(self):
-#         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-#             try:
-#                 client.connect((OBJ_SERVER_IP, TCP_OBJ_PORT))
-#                 client.settimeout(1.0)
-#                 while self.running:
-#                     try:
-#                         data = client.recv(1024)
-#                         if data:
-#                             msg = json.loads(data.decode('utf-8')) # byte buffer로 수정
-#                             self.msg_obj.emit(str(msg))
-#                     except socket.timeout:
-#                         continue
-#             except Exception as e:
-#                 print(f"[TCP OBJ ERROR] {e}")
-
-#     def stop(self):
-#         self.running = False

@@ -7,6 +7,8 @@ import torch
 from process_frame import process_frame
 from pack_lane_result import pack_lane_result
 from unet2 import UNet
+import json
+import struct
 
 TCP_SERVER_IP = "0.0.0.0"
 TCP_SERVER_PORT = 12345
@@ -251,7 +253,12 @@ def udp_video_receiver():
                 if result.get("steering_angle") is None: # Should be set by smoothing logic
                     result["steering_angle"] = 0.0
 
-                result_bytes = pack_lane_result(result)
+                # result_bytes = pack_lane_result(result)
+                result_bytes = json.dumps(result).encode('utf-8')
+                length = len(result_bytes)
+
+                header = struct.pack('>I', length)
+                packet = header + result_bytes
 
                 if uuid % 30 == 0:
                     print(f"[TCP] Frame UUID: {uuid}, Mode: {current_mode}, Sent Steering Angle: {result['steering_angle']:.2f}")
@@ -259,7 +266,7 @@ def udp_video_receiver():
                 with tcp_lock:
                     if tcp_conn:
                         try:
-                            tcp_conn.sendall(result_bytes)
+                            tcp_conn.sendall(packet)
                         except Exception as e:
                             print(f"[TCP SEND ERROR] UUID: {uuid}, Error: {e}")
                             tcp_conn = None
