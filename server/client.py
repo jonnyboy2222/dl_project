@@ -7,6 +7,7 @@ import numpy as np
 import sys
 from queue import Queue
 import struct
+import atexit
 
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
@@ -179,6 +180,14 @@ class WindowClass(QMainWindow, from_class):
         self.timer.timeout.connect(self.update_video_gui)
         self.timer.start(33)  # ~30fps
 
+        self.udp_sender = UdpSender()
+        self.tcp_lane_receiver = TcpLaneReceiver()
+        self.tcp_obj_receiver = TcpObjReceiver()
+
+        threading.Thread(target=self.udp_sender.send_frame, daemon=True).start()
+        threading.Thread(target=self.tcp_lane_receiver.receive_data, daemon=True).start()
+        threading.Thread(target=self.tcp_obj_receiver.receive_data, daemon=True).start()
+
     def draw_result_on_frame(self, frame, result_json):
         if not frame.any():
             return frame
@@ -234,19 +243,15 @@ class WindowClass(QMainWindow, from_class):
         self.label_video_lane.setPixmap(pixmap.scaled(
             self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
 
+    def closeEvent(self, event):
+        self.udp_sender.close()
+        self.tcp_lane_receiver.close()
+        self.tcp_obj_receiver.close()
+        event.accept() # 창 닫기 허용
 
 
 # Main
 if __name__ == "__main__":
-    udp_sender = UdpSender()
-    tcp_lane_receiver = TcpLaneReceiver()
-    tcp_obj_receiver = TcpObjReceiver()
-
-    threading.Thread(target=udp_sender.send_frame, daemon=True).start()
-    threading.Thread(target=tcp_lane_receiver.receive_data, daemon=True).start()
-    threading.Thread(target=tcp_obj_receiver.receive_data, daemon=True).start()
-
-
     app = QApplication(sys.argv)
     myWindows = WindowClass()
     myWindows.show()
