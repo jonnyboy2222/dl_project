@@ -27,16 +27,11 @@ def infer_mask(model: torch.nn.Module, img_tensor: torch.Tensor, device: torch.d
     return pred_mask
 
 
-def extract_center_lane_mask(pred_mask: np.ndarray, center_ratio: float = 0.5) -> np.ndarray:
+def extract_centerline_mask(pred_mask: np.ndarray) -> np.ndarray:
     """
-    중앙 차선 마스크 추출 (1 or 2 클래스만 포함)
+    중앙선(노란 실선: class 3)만 추출
     """
-    h, w = pred_mask.shape
-    start_x = int(w * (0.5 - center_ratio / 2))
-    end_x = int(w * (0.5 + center_ratio / 2))
-    center_zone = np.zeros_like(pred_mask, dtype=bool)
-    center_zone[:, start_x:end_x] = True
-    center_mask = np.logical_and(np.isin(pred_mask, [1, 2]), center_zone)
+    center_mask = (pred_mask == 3)
     return center_mask.astype(np.uint8)
 
 
@@ -147,60 +142,91 @@ def compute_steering(skeleton_points_mask_res: np.ndarray, mask_shape: Tuple[int
            avg_center_x
 
 
-def process_frame(frame: np.ndarray, model: torch.nn.Module, device: torch.device, uuid: int, input_size: Tuple[int, int] = (512, 256), mode: str = "center") -> Dict:
+def process_frame(
+    frame: np.ndarray,
+    model: torch.nn.Module,
+    device: torch.device,
+    uuid: int,
+    input_size: Tuple[int, int] = (512, 256),
+    mode: str = "center"
+) -> Dict:
     """
-    전체 프레임 처리 흐름
-    mode: "center", "left", "right"
+    6-class 분류 기반 lane 추론 처리 (중앙선, 좌/우선 구분 포함)
     """
-    mode_funcs = {
-        "left": extract_left_lane_mask,
-        "right": extract_right_lane_mask,
-        # "center": extract_center_lane_mask  # fallback only
-    }
+    skeleton_points_mask_res = np.array([])
 
-    skeleton_points_mask_res = np.array([]) # Initialize (y,x) points in mask resolution
-
+    # Step 1: 예측
     img_tensor = preprocess_image(frame, input_size)
     pred_mask = infer_mask(model, img_tensor, device)
 
-    if mode == "center":
-        # Primary method: Focus on class 1 or 2 lanes within a central horizontal region.
-        # This helps to ignore extraneous lane detections far from the vehicle's path.
-        center_lane_mask = extract_center_lane_mask(pred_mask)
-        skeleton = compute_skeleton(center_lane_mask)
-        skeleton_points_mask_res = extract_skeleton_points(skeleton)
+    # Step 2: 클래스별 마스크 분리
+    white_solid_mask = (pred_mask == 1)
+    white_dashed_mask = (pred_mask == 2)
+    yellow_center_mask = (pred_mask == 3)
 
-        # Fallback: If no lanes are found in the central zone, try the broader approach.
-        # This might be useful if the vehicle is significantly off-center but lanes are still detected.
-        if skeleton_points_mask_res.size == 0:
-            # print("[Process Frame - Center Mode] No skeleton from central zone, trying broader mask.")
-            broader_center_mask = np.logical_or(pred_mask == 1, pred_mask == 2)
-            skeleton = compute_skeleton(broader_center_mask)
+    h, w = pred_mask.shape
+    has_white = np.count_nonzero(white_solid_mask | white_dashed_mask) > 50
+    has_yellow = np.count_nonzero(yellow_center_mask) > 50
+
+    # Step 3: mode별 처리
+    if mode == "center":
+        if has_white and has_yellow:
+            print("[CENTER] 흰색 + 노란선 → 중심 추론")
+            merged_mask = np.logical_or(white_solid_mask, white_dashed_mask)
+            merged_mask = np.logical_or(merged_mask, yellow_center_mask)
+            skeleton = compute_skeleton(merged_mask.astype(np.uint8))
             skeleton_points_mask_res = extract_skeleton_points(skeleton)
 
-    elif mode in mode_funcs: # "left" or "right"
-        mask = mode_funcs[mode](pred_mask)
-        skeleton = compute_skeleton(mask)
-        skeleton_points_mask_res = extract_skeleton_points(skeleton)
+        elif has_white:
+            print("[CENTER] 흰색 차선만 존재 → 중심 추론")
+            merged_mask = np.logical_or(white_solid_mask, white_dashed_mask)
+            skeleton = compute_skeleton(merged_mask.astype(np.uint8))
+            skeleton_points_mask_res = extract_skeleton_points(skeleton)
+
+        elif has_yellow:
+            print("[CENTER] 노란선만 감지됨 → 중심 추론 불가")
+            skeleton_points_mask_res = np.array([])
+
+        else:
+            print("[CENTER] 유효한 차선 없음 → 중심 추론 불가")
+            skeleton_points_mask_res = np.array([])
+
+    elif mode in ["left", "right"]:
+        dashed_only = np.count_nonzero(white_dashed_mask) > 50
+        solid_or_yellow = np.count_nonzero(white_solid_mask) > 50 or has_yellow
+
+        if dashed_only and not solid_or_yellow:
+            print(f"[{mode.upper()}] 점선만 감지됨 → 조향 계산 진행")
+            skeleton = compute_skeleton(white_dashed_mask.astype(np.uint8))
+            skeleton_points_mask_res = extract_skeleton_points(skeleton)
+        else:
+            print(f"[{mode.upper()}] 점선 단독 외 차선 감지됨 → 추론 불가")
+            skeleton_points_mask_res = np.array([])
+
     else:
-        print(f"Warning: Unknown mode '{mode}'. Defaulting to center mode logic.")
-        # Default to center mode logic if mode is invalid
-        center_lane_mask = np.logical_or(pred_mask == 1, pred_mask == 2)
-        skeleton = compute_skeleton(center_lane_mask)
+        print(f"[WARNING] Unknown mode '{mode}' → center logic 사용")
+        merged_mask = np.logical_or(white_solid_mask, white_dashed_mask)
+        merged_mask = np.logical_or(merged_mask, yellow_center_mask)
+        skeleton = compute_skeleton(merged_mask.astype(np.uint8))
         skeleton_points_mask_res = extract_skeleton_points(skeleton)
 
-    # Calculate raw offset and steering angle
-    offset, steering_angle, avg_center_x_mask_res = compute_steering(skeleton_points_mask_res, pred_mask.shape)
+    # Step 4: 조향 계산
+    offset, steering_angle, avg_center_x_mask_res = compute_steering(
+        skeleton_points_mask_res, pred_mask.shape
+    )
 
-    # Remap all drivable skeleton points for visualization
-    skeleton_xy_orig_res = remap_skeleton_coords(skeleton_points_mask_res, frame.shape, pred_mask.shape)
+    # Step 5: 원본 해상도로 remap
+    skeleton_xy_orig_res = remap_skeleton_coords(
+        skeleton_points_mask_res, frame.shape, pred_mask.shape
+    )
 
     return {
         "uuid": uuid,
         "offset": offset,
-        "steering_angle": steering_angle, # This is the RAW angle
-        "skeleton_points": [list(p) for p in skeleton_xy_orig_res], # Drivable path skeleton (model-based)
-        "pred_mask": pred_mask, # Model's raw prediction mask (resized resolution)
-        "avg_center_x_mask_res": avg_center_x_mask_res, # Average x of centerline in mask coords
-        "pred_mask_shape": pred_mask.shape # (H, W) of the prediction mask
+        "steering_angle": steering_angle,
+        "skeleton_points": [list(p) for p in skeleton_xy_orig_res],
+        "pred_mask": pred_mask,
+        "avg_center_x_mask_res": avg_center_x_mask_res,
+        "pred_mask_shape": pred_mask.shape
     }
+
