@@ -28,7 +28,11 @@ UDP_OBJ_PORT = 54322
 latest_frame = None
 latest_lane_result = None
 frame_lock = Lock()
-json_lock = Lock()
+lane_json_lock = Lock()
+
+latest_obj_result = None
+obj_json_lock = Lock()
+
 
 
 from_class = uic.loadUiType("/home/lee/dev_ws/projects/DL_project/gui/client_video.ui")[0]
@@ -132,6 +136,7 @@ class TcpObjReceiver():
         self.tcp_obj.settimeout(1.0)
 
     def receive_data(self):
+        global latest_obj_result, obj_json_lock
         while True:
             try:
                 # 먼저 4바이트 헤더 읽기
@@ -150,6 +155,9 @@ class TcpObjReceiver():
                     buffer += chunk
 
                 json_data = json.loads(buffer.decode('utf-8'))
+
+                with obj_json_lock:
+                    latest_obj_result = json_data
                 
                 return json_data
             
@@ -161,12 +169,6 @@ class TcpObjReceiver():
         if self.tcp_obj is not None:
             self.tcp_obj.close()
             self.tcp_obj = None
-
-
-
-
-
-
 
 
 
@@ -188,7 +190,7 @@ class WindowClass(QMainWindow, from_class):
         threading.Thread(target=self.tcp_lane_receiver.receive_data, daemon=True).start()
         threading.Thread(target=self.tcp_obj_receiver.receive_data, daemon=True).start()
 
-    def draw_result_on_frame(self, frame, result_json):
+    def draw_result_on_frame(self, frame, result_json, obj_result):
         if not frame.any():
             return frame
 
@@ -210,6 +212,17 @@ class WindowClass(QMainWindow, from_class):
                         pt2 = tuple(lane_pts[i + 1])
                         cv2.line(annotated, pt1, pt2, color, 2)
 
+            if obj_result is not None and isinstance(obj_result, list):
+                for det in obj_result:
+                    x1, y1, x2, y2 = det["bbox"]
+                    cls_name = det.get("class_name", str(det["class_id"]))
+                    conf = det["confidence"]
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    label = f"{cls_name} {conf:.2f}"
+                    cv2.putText(annotated, label, (x1, y1 - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+
             angle = result_json.get("steering_angle", 0.0)
             cv2.putText(annotated, f"Steering Angle: {angle:.2f}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -220,19 +233,22 @@ class WindowClass(QMainWindow, from_class):
         return annotated
     
     def update_video_gui(self):
-        global latest_frame, latest_lane_result, frame_lock, json_lock
+        global latest_frame, latest_lane_result, frame_lock, lane_json_lock, latest_obj_result, obj_json_lock
 
         with frame_lock:
             if latest_frame is None:
                 return
             frame = latest_frame.copy()
 
-        with json_lock:
-            result = latest_lane_result
+        with lane_json_lock:
+            lane_result = latest_lane_result
 
-        if result is not None:
-            frame = self.draw_result_on_frame(frame, result)
-            angle = result.get("steering_angle", 0.0)
+        with obj_json_lock:
+            obj_result = latest_obj_result
+
+        if frame is not None:
+            frame = self.draw_result_on_frame(frame, lane_result, obj_result)
+            angle = lane_result.get("steering_angle", 0.0)
             self.label_msg_lane.setText(f"Angle: {angle:.2f}")
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
