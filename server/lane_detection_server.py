@@ -243,18 +243,20 @@ def udp_video_receiver():
                     resized_colorized_mask = cv2.resize(colorized_mask, 
                                                         (display_frame.shape[1], display_frame.shape[0]), 
                                                         interpolation=cv2.INTER_NEAREST)
+                    
+                    if pred_mask_from_process == 4:
+                        real_distance = distance(pred_mask_from_process.shape, 0.05)
+                        print(f'정지선까지의 거리 : {real_distance:.2f} m')
+
+                        if real_distance < 2.0:
+                            print("STOP")
 
                     # Blend display_frame with the resized_colorized_mask
                     blended_frame = cv2.addWeighted(display_frame, 0.7, resized_colorized_mask, 0.3, 0.0)
                     cv2.imshow(SERVER_ANNOTATED_FRAME_WINDOW_NAME, blended_frame)
+
                 else: # pred_mask_from_process is None
                     cv2.imshow(SERVER_ANNOTATED_FRAME_WINDOW_NAME, display_frame)
-
-                    if pred_mask_from_process == 4:
-                        real_distance = distance(pred_mask_from_process.shape)
-
-                        if real_distance < 3:
-                            print("STOP")
 
                 cv2.waitKey(1)
 
