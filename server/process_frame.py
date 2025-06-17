@@ -27,12 +27,12 @@ def infer_mask(model: torch.nn.Module, img_tensor: torch.Tensor, device: torch.d
     return pred_mask
 
 
-def extract_centerline_mask(pred_mask: np.ndarray) -> np.ndarray:
-    """
-    중앙선(노란 실선: class 3)만 추출
-    """
-    center_mask = (pred_mask == 3)
-    return center_mask.astype(np.uint8)
+# def extract_centerline_mask(pred_mask: np.ndarray) -> np.ndarray:
+#     """
+#     중앙선(노란 실선: class 3)만 추출
+#     """
+#     center_mask = (pred_mask == 3)
+#     return center_mask.astype(np.uint8)
 
 
 def extract_left_lane_mask(pred_mask: np.ndarray, lane_width_ratio: float = 0.5) -> np.ndarray:
@@ -62,6 +62,23 @@ def extract_right_lane_mask(pred_mask: np.ndarray, lane_width_ratio: float = 0.2
     right_mask = np.logical_and(np.logical_or(pred_mask == 1, pred_mask == 2), right_zone)
 
     return right_mask.astype(np.uint8)
+
+# 정지선 횡단보도 추가
+# def extract_stop_lane_mask(pred_mask: np.ndarray) -> np.ndarray:
+#     """
+#     정지선 마스크 추출 (class 4)
+#     """
+#     stop_lane_mask = (pred_mask == 4)
+
+#     return stop_lane_mask.astype(np.uint8)
+
+# def extract_crosswalk_mask(pred_mask: np.ndarray) -> np.ndarray:
+#     """
+#     횡단보도 마스크 추출 (class 5)
+#     """
+#     crosswalk_mask = (pred_mask == 5)
+
+#     return crosswalk_mask.astype(np.uint8)
 
 
 def compute_skeleton(mask: np.ndarray) -> np.ndarray:
@@ -159,12 +176,12 @@ def process_frame(
     img_tensor = preprocess_image(frame, input_size)
     pred_mask = infer_mask(model, img_tensor, device)
 
-    # Step 2: 클래스별 마스크 분리
-    white_solid_mask = (pred_mask == 1)
-    white_dashed_mask = (pred_mask == 2)
-    yellow_center_mask = (pred_mask == 3)
+    # # Step 2: 클래스별 마스크 분리
+    # white_solid_mask = (pred_mask == 1)
+    # white_dashed_mask = (pred_mask == 2)
+    # yellow_center_mask = (pred_mask == 3)
 
-        # Step 3: mode별 처리
+    # Step 3: mode별 처리
     if mode == "center":
         merged_mask = np.zeros_like(pred_mask, dtype=bool)
         center_zone = (pred_mask == 1) | (pred_mask == 2) | (pred_mask == 3)
@@ -200,10 +217,27 @@ def process_frame(
             print("[RIGHT] 우측 점선 없음 → 차선 변경 불가")
             skeleton_points_mask_res = np.array([])
 
-
     else:
         print(f"[WARNING] Unknown mode '{mode}' → center logic 사용")
         merged_mask = (pred_mask == 1) | (pred_mask == 2) | (pred_mask == 3)
+
+
+    # 정지선 횡단보도
+    if pred_mask == 4:
+        merged_mask = np.zeros_like(pred_mask, dtype=bool)
+        stop_zone = (pred_mask == 4)
+
+        if np.count_nonzero(stop_zone) > 50:
+            print("[STOP LANE]")
+            merged_mask = stop_zone
+
+    if pred_mask == 5:
+        merged_mask = np.zeros_like(pred_mask, dtype=bool)
+        crosswalk_zone = (pred_mask == 4)
+
+        if np.count_nonzero(crosswalk_zone) > 50:
+            print("[CORSS WALK]")
+            merged_mask = crosswalk_zone
 
     # Skeleton 추출은 유효 마스크가 있을 경우만
     if 'merged_mask' in locals() and np.count_nonzero(merged_mask) > 0:
@@ -222,6 +256,9 @@ def process_frame(
     skeleton_xy_orig_res = remap_skeleton_coords(
         skeleton_points_mask_res, frame.shape, pred_mask.shape
     )
+
+    if pred_mask == 4 or pred_mask == 5:
+        offset, steering_angle, avg_center_x_mask_res = None, None, None
 
     return {
         "uuid": uuid,

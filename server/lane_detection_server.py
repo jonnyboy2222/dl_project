@@ -10,6 +10,8 @@ from unet2 import UNet
 import json
 import struct
 
+import distance
+
 TCP_SERVER_IP = "0.0.0.0"
 TCP_SERVER_PORT = 12345
 
@@ -47,6 +49,16 @@ stable_frame_count = 0
 
 SERVER_ANNOTATED_FRAME_WINDOW_NAME = "Server - Annotated Frame"
 SERVER_PRED_MASK_WINDOW_NAME = "Server - Predicted Mask"
+
+# 색상 정의: (BGR)
+color_map = {
+    0: [0, 0, 0],         # 배경 - 검정
+    1: [255, 255, 255],   # 흰색 실선 - 흰색
+    2: [128, 128, 128],   # 흰색 점선 - 회색
+    3: [0, 255, 255],     # 중앙선(노란 실선) - 노랑
+    4: [0, 0, 255],       # 정지선 - 빨강
+    5: [0, 255, 0],       # 횡단보도 - 초록
+}
 
 
 def handle_client(conn, addr):
@@ -215,10 +227,18 @@ def udp_video_receiver():
                     # Create a colorized version of the mask for display
                     # pred_mask_from_process is (H, W) with values 0, 1, 2
                     mask_h_pred, mask_w_pred = pred_mask_from_process.shape
+                    # colorized_mask = np.zeros((mask_h_pred, mask_w_pred, 3), dtype=np.uint8)
+                    # colorized_mask[pred_mask_from_process == 1] = [255, 255, 255]  # Class 1: White 흰색 실선
+                    # colorized_mask[pred_mask_from_process == 2] = [128, 128, 128]  # Class 2: Gray 흰색 점선
+                    # colorized_mask[pred_mask_from_process == 3] = [0, 255, 255]  # Class 3: Yellow 중앙선 (노란 실선)
+                    # colorized_mask[pred_mask_from_process == 4] = [0, 0, 255]  # Class 4: Red 정지선
+                    # colorized_mask[pred_mask_from_process == 5] = [0, 255, 0]  # Class 5: Green 횡단보도
+
+                    # 마스크 컬러화
                     colorized_mask = np.zeros((mask_h_pred, mask_w_pred, 3), dtype=np.uint8)
-                    colorized_mask[pred_mask_from_process == 1] = [255, 0, 0]  # Class 1: Blue
-                    colorized_mask[pred_mask_from_process == 2] = [0, 0, 255]  # Class 2: Red
-                    
+                    for class_id, color in color_map.items():
+                        colorized_mask[result.get("pred_mask") == class_id] = color
+
                     # Resize colorized_mask to match display_frame dimensions
                     resized_colorized_mask = cv2.resize(colorized_mask, 
                                                         (display_frame.shape[1], display_frame.shape[0]), 
@@ -229,6 +249,12 @@ def udp_video_receiver():
                     cv2.imshow(SERVER_ANNOTATED_FRAME_WINDOW_NAME, blended_frame)
                 else: # pred_mask_from_process is None
                     cv2.imshow(SERVER_ANNOTATED_FRAME_WINDOW_NAME, display_frame)
+
+                    if pred_mask_from_process == 4:
+                        real_distance = distance(pred_mask_from_process.shape)
+
+                        if real_distance < 3:
+                            print("STOP")
 
                 cv2.waitKey(1)
 
