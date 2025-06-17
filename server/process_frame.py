@@ -164,51 +164,54 @@ def process_frame(
     white_dashed_mask = (pred_mask == 2)
     yellow_center_mask = (pred_mask == 3)
 
-    h, w = pred_mask.shape
-    has_white = np.count_nonzero(white_solid_mask | white_dashed_mask) > 50
-    has_yellow = np.count_nonzero(yellow_center_mask) > 50
-
-    # Step 3: mode별 처리
+        # Step 3: mode별 처리
     if mode == "center":
-        if has_white and has_yellow:
-            print("[CENTER] 흰색 + 노란선 → 중심 추론")
-            merged_mask = np.logical_or(white_solid_mask, white_dashed_mask)
-            merged_mask = np.logical_or(merged_mask, yellow_center_mask)
-            skeleton = compute_skeleton(merged_mask.astype(np.uint8))
-            skeleton_points_mask_res = extract_skeleton_points(skeleton)
+        merged_mask = np.zeros_like(pred_mask, dtype=bool)
+        center_zone = (pred_mask == 1) | (pred_mask == 2) | (pred_mask == 3)
 
-        elif has_white:
-            print("[CENTER] 흰색 차선만 존재 → 중심 추론")
-            merged_mask = np.logical_or(white_solid_mask, white_dashed_mask)
-            skeleton = compute_skeleton(merged_mask.astype(np.uint8))
-            skeleton_points_mask_res = extract_skeleton_points(skeleton)
-
-        elif has_yellow:
-            print("[CENTER] 노란선만 감지됨 → 중심 추론 불가")
-            skeleton_points_mask_res = np.array([])
-
+        if np.count_nonzero(center_zone) > 50:
+            print("[CENTER] 중앙 영역 차선 감지 → 중심 추론")
+            merged_mask = center_zone
         else:
-            print("[CENTER] 유효한 차선 없음 → 중심 추론 불가")
+            print("[CENTER] 중앙 차선 없음 → 추론 불가")
             skeleton_points_mask_res = np.array([])
 
-    elif mode in ["left", "right"]:
-        dashed_only = np.count_nonzero(white_dashed_mask) > 50
-        solid_or_yellow = np.count_nonzero(white_solid_mask) > 50 or has_yellow
+    elif mode == "left":
+        left_mask = extract_left_lane_mask(pred_mask, lane_width_ratio=0.5)
+        dashed_mask = (pred_mask == 2)
+        left_dashed_mask = np.logical_and(left_mask, dashed_mask)
 
-        if dashed_only and not solid_or_yellow:
-            print(f"[{mode.upper()}] 점선만 감지됨 → 조향 계산 진행")
-            skeleton = compute_skeleton(white_dashed_mask.astype(np.uint8))
-            skeleton_points_mask_res = extract_skeleton_points(skeleton)
+        if np.count_nonzero(left_dashed_mask) > 50:
+            print("[LEFT] 좌측 점선 감지됨 → 차선 변경 조향 계산 가능")
+            merged_mask = left_dashed_mask  # 점선만 포함
         else:
-            print(f"[{mode.upper()}] 점선 단독 외 차선 감지됨 → 추론 불가")
+            print("[LEFT] 좌측 점선 없음 → 차선 변경 불가")
             skeleton_points_mask_res = np.array([])
+
+    elif mode == "right":
+        right_mask = extract_right_lane_mask(pred_mask, lane_width_ratio=0.5)
+        dashed_mask = (pred_mask == 2)
+        right_dashed_mask = np.logical_and(right_mask, dashed_mask)
+
+        if np.count_nonzero(right_dashed_mask) > 50:
+            print("[RIGHT] 우측 점선 감지됨 → 차선 변경 조향 계산 가능")
+            merged_mask = right_dashed_mask  # 점선만 포함
+        else:
+            print("[RIGHT] 우측 점선 없음 → 차선 변경 불가")
+            skeleton_points_mask_res = np.array([])
+
 
     else:
         print(f"[WARNING] Unknown mode '{mode}' → center logic 사용")
-        merged_mask = np.logical_or(white_solid_mask, white_dashed_mask)
-        merged_mask = np.logical_or(merged_mask, yellow_center_mask)
+        merged_mask = (pred_mask == 1) | (pred_mask == 2) | (pred_mask == 3)
+
+    # Skeleton 추출은 유효 마스크가 있을 경우만
+    if 'merged_mask' in locals() and np.count_nonzero(merged_mask) > 0:
         skeleton = compute_skeleton(merged_mask.astype(np.uint8))
         skeleton_points_mask_res = extract_skeleton_points(skeleton)
+    else:
+        print("[WARNING] 유효한 merged_mask 없음 → 스켈레톤 추출 생략")
+        skeleton_points_mask_res = np.array([])
 
     # Step 4: 조향 계산
     offset, steering_angle, avg_center_x_mask_res = compute_steering(
