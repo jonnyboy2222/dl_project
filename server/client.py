@@ -16,6 +16,8 @@ from PyQt6 import uic
 
 from threading import Lock
 
+import distance
+
 # 서버 IP 및 포트 정보
 LANE_SERVER_IP = "192.168.0.252"
 TCP_LANE_PORT = 12345
@@ -182,6 +184,10 @@ class WindowClass(QMainWindow, from_class):
         self.timer.timeout.connect(self.update_video_gui)
         self.timer.start(33)  # ~30fps
 
+        # 신호등과 정지선
+        self.state = True # Moving
+        self.prev_state = True
+
         self.udp_sender = UdpSender()
         self.tcp_lane_receiver = TcpLaneReceiver()
         self.tcp_obj_receiver = TcpObjReceiver()
@@ -206,11 +212,28 @@ class WindowClass(QMainWindow, from_class):
             if "lanes" in result_json:
                 for lane in result_json["lanes"]:
                     lane_pts = lane["points"]
-                    color = (255, 0, 0) if lane["class_name"] == "white_solid" else (0, 255, 0)
+                    color = (255, 255, 255) if lane["class_name"] == "white_solid" else (128, 128, 128)
                     for i in range(len(lane_pts) - 1):
                         pt1 = tuple(lane_pts[i])
                         pt2 = tuple(lane_pts[i + 1])
                         cv2.line(annotated, pt1, pt2, color, 2)
+
+            # 정지선, 횡단보도 추가
+            if "stop_line" in result_json:
+                pts = result_json["stop_line"]
+                for i in range(len(pts) - 1):
+                    pt1 = tuple(pts[i])
+                    pt2 = tuple(pts[i + 1])
+                    cv2.line(annotated, pt1, pt2, (0, 0, 255), 2)  # Red
+
+            if "crosswalk" in result_json:
+                pts = result_json["crosswalk"]
+                for i in range(len(pts) - 1):
+                    pt1 = tuple(pts[i])
+                    pt2 = tuple(pts[i + 1])
+                if pts and len(pts) > 2: # 점이 세 개 이상 있어야 다각형을 채울 수 있음
+                    cv2.fillPoly(annotated, [np.array(pts, dtype=np.int32)], (0, 255, 0))  # Green
+
 
             if obj_result is not None and isinstance(obj_result, list):
                 for det in obj_result:
@@ -221,7 +244,16 @@ class WindowClass(QMainWindow, from_class):
                     label = f"{cls_name} {conf:.2f}"
                     cv2.putText(annotated, label, (x1, y1 - 5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                    
+            # 정지선과의 거리 2.0m 미만이고 빨간불일떄 
+            self.state = True        
+            if result_json.get("real_distance") < 2.0 and obj_result.get("class_name") == "vehicle_stop":
+                # print("STOP")
+                self.state = False
 
+            if self.state==True and self.prev_state==False:
+                # print("GO")
+                self.prev_state = self.state
 
             angle = result_json.get("steering_angle", 0.0)
             cv2.putText(annotated, f"Steering Angle: {angle:.2f}", (10, 30),
@@ -248,8 +280,24 @@ class WindowClass(QMainWindow, from_class):
 
         if frame is not None:
             frame = self.draw_result_on_frame(frame, lane_result, obj_result)
+
             angle = lane_result.get("steering_angle", 0.0)
-            self.label_msg_lane.setText(f"Angle: {angle:.2f}")
+            self.label_msg_angle.setText(f"Angle: {angle:.2f}")
+
+            real_distance = lane_result.get("real_distance", 0.0)
+            self.state = True        
+            if real_distance < 2.0 and obj_result.get("class_name") == "vehicle_stop":
+                self.label_msg_alert.setText("STOP")
+                self.state = False
+
+            if self.state==True and self.prev_state==False:
+                self.label_msg_alert.setText("GO")
+                self.prev_state = self.state
+
+            # 차선 변경 가능 유무 메세지
+            self.label_msg_lane.setText("차선 변경이 가능합니다")
+
+
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
@@ -264,7 +312,6 @@ class WindowClass(QMainWindow, from_class):
         self.tcp_lane_receiver.close()
         self.tcp_obj_receiver.close()
         event.accept() # 창 닫기 허용
-
 
 # Main
 if __name__ == "__main__":
