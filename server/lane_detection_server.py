@@ -76,12 +76,10 @@ def udp_video_receiver():
                     print("[UDP] Invalid packet, missing delimiter")
                     continue
 
-                header, img_data = data.split(b'||', 1)
-                if len(header) != 4:
-                    print(f"[UDP] Invalid UUID header length: {len(header)}")
+                uuid, img_data = data.split(b'||', 1)
+                if len(uuid) != 4:
+                    print(f"[UDP] Invalid UUID header length: {len(uuid)}")
                     continue
-
-                uuid = int.from_bytes(header, 'big')
 
                 np_data = np.frombuffer(img_data, dtype=np.uint8)
                 frame = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
@@ -95,7 +93,7 @@ def udp_video_receiver():
 
 
                 # 추론 + 결과
-                result = process_frame(frame, model, device, uuid)
+                result = process_frame(frame, model, device)
                 
                 # Extract raw values from process_frame
                 pred_mask_from_process = result.get("pred_mask", None)
@@ -134,7 +132,7 @@ def udp_video_receiver():
                 length = len(result_bytes)
 
                 header = struct.pack('>I', length)
-                packet = header + result_bytes
+                packet = header + uuid + result_bytes
 
                 if uuid % 30 == 0:
                     print(f"[TCP] Frame UUID: {uuid}")

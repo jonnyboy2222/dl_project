@@ -31,15 +31,14 @@ def infer_mask(model: torch.nn.Module, img_tensor: torch.Tensor, device: torch.d
     return pred_mask
 
 
-def process_frame(frame: np.ndarray, model: torch.nn.Module, device: torch.device, uuid: int,
+def process_frame(frame: np.ndarray, model: torch.nn.Module, device: torch.device,
                   input_size: Tuple[int, int] = (512, 256)) -> Dict:
+    
     img_tensor = preprocess_image(frame, input_size)
     pred_mask = infer_mask(model, img_tensor, device)
     # pred_mask 사이즈 줄이기
-
     pred_mask = encode_mask_png_base64(pred_mask)
 
     return {
-        "uuid": uuid,
         "pred_mask": pred_mask
     }
