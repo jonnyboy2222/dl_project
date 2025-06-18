@@ -27,8 +27,6 @@ model = YOLO(model_path)
 model.to(device)
 
 
-
-
 def handle_client(conn, addr):
     global tcp_conn
     print(f"[TCP] Connected from {addr}")
@@ -64,12 +62,10 @@ def udp_video_receiver():
                     print("[UDP] Invalid packet, missing delimiter")
                     continue
 
-                header, img_data = data.split(b'||', 1)
-                if len(header) != 4:
-                    print(f"[UDP] Invalid UUID header length: {len(header)}")
+                uuid, img_data = data.split(b'||', 1)
+                if len(uuid) != 4:
+                    print(f"[UDP] Invalid UUID uuid length: {len(uuid)}")
                     continue
-
-                uuid = int.from_bytes(header, 'big')
 
                 np_data = np.frombuffer(img_data, dtype=np.uint8)
                 frame = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
@@ -97,13 +93,11 @@ def udp_video_receiver():
                         "bbox": [x1, y1, x2, y2]
                     })
 
-
-                # result_bytes = pack_lane_result(result)
                 result_bytes = json.dumps(result).encode('utf-8')
                 length = len(result_bytes)
 
                 header = struct.pack('>I', length)
-                packet = header + result_bytes
+                packet = header + uuid + result_bytes
 
                 if uuid % 30 == 0:
                     print(f"[TCP] Frame UUID: {uuid}")
