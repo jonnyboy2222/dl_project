@@ -16,7 +16,7 @@ from PyQt6 import uic
 
 from threading import Lock
 
-# import distance
+from distance import estimate_stopline_distance
 
 # 서버 IP 및 포트 정보
 LANE_SERVER_IP = "192.168.0.252"
@@ -33,6 +33,7 @@ lane_tcp_queue = queue.Queue()
 obj_tcp_queue = queue.Queue()
 
 lane_result_queue = queue.Queue()
+obj_result_queue = queue.Queue()
 
 HEADER_LENGTH = 4
 UUID_LENGTH = 4
@@ -221,7 +222,49 @@ class TcpObjReceiver():
             self.tcp_obj.close()
             self.tcp_obj = None
 
+class ObjectResultProcessor():
+    def __init__(self):
+        pass
 
+    def process_result(self, frame):
+        try:
+            # 큐에서 최신 결과 추출
+            while not obj_tcp_queue.empty():
+                obj_data = obj_tcp_queue.get_nowait()
+                # if obj_data is not None:
+                #     self.current_detections = obj_data
+
+            # 프레임과 동일한 크기의 빈 overlay 생성
+            mask = np.zeros_like(frame, dtype=np.uint8)
+
+            # detection 결과를 mask에 그림
+            for det in self.current_detections:
+                if 'bbox' not in det:
+                    continue
+                x1, y1, x2, y2 = det['bbox']
+                class_name = det.get('class_name', 'object')
+                conf = det.get('confidence', 0.0)
+
+                label = f"{class_name} {conf:.2f}"
+                color = (0, 255, 0)
+
+                cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(mask, label, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+            # return mask 
+
+        except Exception as e:
+            print(f"[OBJ RESULT PROCESS ERROR] {e}")
+            return None
+
+        # "class_id": cls_id,
+        # "class_name": class_names[cls_id],
+        # "confidence": round(conf, 3),
+        # "bbox": [x1, y1, x2, y2]
+
+        # ['car', 'child_protection', 'construction', 'person', 'speed_limit_30', 
+        # 'speed_limit_50', 'stop_sign', 'veh_go', 'veh_goLeft', 'veh_stop', 'veh_warning']
 
 class WindowClass(QMainWindow, from_class):
     def __init__(self):
