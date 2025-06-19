@@ -113,6 +113,12 @@ class TcpLaneReceiver():
         self.tcp_lane.connect((LANE_SERVER_IP, TCP_LANE_PORT))
         self.tcp_lane.settimeout(1.0)
 
+    def decode_mask_png_base64(encoded: str) -> np.ndarray:
+        data = base64.b64decode(encoded)
+        nparr = np.frombuffer(data, np.uint8)
+        mask = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
+        return mask  # dtype=np.uint8, shape=(H, W)
+
     def receive_data(self):
         while True:
             try:
@@ -137,9 +143,17 @@ class TcpLaneReceiver():
                         raise ConnectionError("Socket closed unexpectedly")
                     buffer += chunk
 
-                pred_mask = json.loads(buffer.decode('utf-8'))
+                result = json.loads(buffer.decode('utf-8'))
 
-                lane_tcp_queue.put((uuid, pred_mask))
+                if "pred_mask" not in result:
+                    print(f"[WARN] pred_mask not in result for UUID {uuid}")
+                    continue
+
+                # base64 → ndarray 변환
+                pred_mask = self.decode_mask_png_base64(result["pred_mask"])
+
+                lane_tcp_queue.put(uuid, pred_mask)
+                
                 
                 # return json_data
             
@@ -159,12 +173,11 @@ class LaneResultProcessor():
     def process_result(self):
         try:
             while not lane_tcp_queue.empty():
-                uuid, lane_data = lane_tcp_queue.get()
+                uuid, pred_mask = lane_tcp_queue.get()
                 
-                if lane_data is None:
+                if pred_mask is None:
                     continue
 
-                pred_mask = np.array(lane_data["pred_mask"], dtype=np.uint8)
                 h, w = pred_mask.shape
 
                 left_zone = pred_mask[int(h * 0.5):, int(w * 0.2):int(w * 0.4)]
@@ -383,7 +396,7 @@ if __name__ == "__main__":
     df_obj  = pd.DataFrame.from_dict(obj_latency_check, orient='index')
 
     df_merged = pd.concat([df_orig, df_lane, df_obj], axis=1)
-    
+
     df_merged.to_csv("latency_summary.csv", index_label="uuid")
 
 
