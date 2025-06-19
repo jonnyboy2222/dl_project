@@ -107,11 +107,11 @@ class TcpLaneReceiver():
 
                 json_len = struct.unpack('>I', header)[0]
 
-                uuid = self.tcp_lane.recv(UUID_LENGTH)
-                if len(uuid) < UUID_LENGTH:
+                uuid_raw = self.tcp_lane.recv(UUID_LENGTH)
+                if len(uuid_raw) < UUID_LENGTH:
                     raise ValueError("Incomplete uuid")
 
-                uuid = struct.unpack('>I', uuid)[0]
+                uuid = struct.unpack('>I', uuid_raw)[0]
 
                 # 정확히 그 길이만큼 받기
                 buffer = b''
@@ -199,6 +199,12 @@ class TcpObjReceiver():
 
                 json_len = struct.unpack('>I', header)[0]
 
+                uuid_raw = self.tcp_obj.recv(UUID_LENGTH)
+                if len(uuid_raw) < UUID_LENGTH:
+                    raise ValueError("Incomplete uuid")
+                
+                uuid = struct.unpack('>I', uuid_raw)[0]
+
                 # 정확히 그 길이만큼 받기
                 buffer = b''
                 while len(buffer) < json_len:
@@ -209,7 +215,7 @@ class TcpObjReceiver():
 
                 json_data = json.loads(buffer.decode('utf-8'))
 
-                obj_tcp_queue.put(json_data)
+                obj_tcp_queue.put(uuid, json_data)
                 
                 # return json_data
             
@@ -230,7 +236,7 @@ class ObjectResultProcessor():
         try:
             # 큐에서 최신 결과 추출
             while not obj_tcp_queue.empty():
-                obj_data = obj_tcp_queue.get_nowait()
+                uuid, json = obj_tcp_queue.get_nowait()
                 # if obj_data is not None:
                 #     self.current_detections = obj_data
 
