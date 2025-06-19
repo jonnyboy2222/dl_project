@@ -142,7 +142,7 @@ class LaneResultProcessor():
     def process_result(self):
         while True:
             try:
-                lane_data = lane_tcp_queue.get()[1]
+                uuid, lane_data = lane_tcp_queue.get()
                 
                 if lane_data is None:
                     continue
@@ -171,9 +171,9 @@ class LaneResultProcessor():
                 if crosswalk:
                     msg[4] = 1
 
-                lane_result_queue.put(msg)
+                lane_result_queue.put((uuid, pred_mask, msg))
 
-                return pred_mask
+                # return uuid, pred_mask
 
 
             except Exception as e:
@@ -192,7 +192,7 @@ class TcpObjReceiver():
         while True:
             try:
                 # 먼저 4바이트 헤더 읽기
-                header = self.tcp_obj.recv(4)
+                header = self.tcp_obj.recv(HEADER_LENGTH)
                 if len(header) < 4:
                     raise ValueError("Incomplete header")
 
@@ -317,11 +317,11 @@ class WindowClass(QMainWindow, from_class):
         return annotated
     
     def update_video_gui(self):
-        frame = udp_video_queue.get()
+        frame = udp_video_queue.get() # uuid, frame
 
-        lane_result = lane_result_queue.get()
+        lane_result = lane_result_queue.get() # uuid, pred_mask, msg
 
-        obj_result = obj_tcp_queue.get()
+        obj_result = obj_tcp_queue.get() # uuid, overlay, cls_name
 
 
         if frame is not None:
