@@ -19,6 +19,7 @@ from threading import Lock
 from distance import estimate_stopline_distance
 
 import base64
+import pandas as pd
 
 # 서버 IP 및 포트 정보
 LANE_SERVER_IP = "192.168.0.252"
@@ -37,10 +38,16 @@ obj_tcp_queue = queue.Queue()
 lane_result_queue = queue.Queue()
 obj_result_queue = queue.Queue()
 
+orig_frame = {}
+lane_mask = {}
+obj_mask = {}
+
 HEADER_LENGTH = 4
 UUID_LENGTH = 4
 
-
+original_latency_check = {}
+lane_latency_check = {}
+obj_latency_check = {}
 
 
 from_class = uic.loadUiType("/home/lee/dev_ws/projects/DL_project/gui/client_video.ui")[0]
@@ -53,6 +60,8 @@ class UdpSender():
         self.uuid_counter = 0
 
     def send_frame(self):
+        global original_latency_check
+
         self.cap = cv2.VideoCapture(0)
 
         try:
@@ -68,8 +77,6 @@ class UdpSender():
 
                 frame = cv2.resize(frame, (640, 480))
 
-                udp_video_queue.put((self.uuid_counter, frame.copy()))
-
                 if not ret:
                     continue
                 
@@ -80,6 +87,13 @@ class UdpSender():
                 try:
                     self.udp_lane.sendto(uuid_msg + b'||' + buffer.tobytes(), (LANE_SERVER_IP, UDP_LANE_PORT))
                     self.udp_obj.sendto(uuid_msg + b'||' + buffer.tobytes(), (OBJ_SERVER_IP, UDP_OBJ_PORT))
+
+                    udp_video_queue.put((self.uuid_counter, frame.copy()))
+
+
+                    # latency_check
+                    original_latency_check[self.uuid_counter] = time.time()
+
                 except Exception as e:
                     print(f"[UDP SEND ERROR] {e}")
         finally:
@@ -142,15 +156,9 @@ class LaneResultProcessor():
     def __init__(self):
         pass
 
-    def decode_mask_png_base64(encoded: str) -> np.ndarray:
-        data = base64.b64decode(encoded)
-        nparr = np.frombuffer(data, dtype=np.uint8)
-        mask = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-        return mask
-
     def process_result(self):
-        while True:
-            try:
+        try:
+            while not lane_tcp_queue.empty():
                 uuid, lane_data = lane_tcp_queue.get()
                 
                 if lane_data is None:
@@ -182,12 +190,15 @@ class LaneResultProcessor():
 
                 lane_result_queue.put((uuid, pred_mask, msg))
 
+                # latency_check
+                lane_latency_check[uuid] = time.time()
+
                 # return uuid, pred_mask
 
 
-            except Exception as e:
-                print(f"[LANE RESULT PROCESS ERROR] {e}")
-                return None
+        except Exception as e:
+            print(f"[LANE RESULT PROCESS ERROR] {e}")
+            return None
 
 
 
@@ -240,7 +251,7 @@ class ObjectResultProcessor():
     def __init__(self):
         pass
 
-    def process_result(self, frame):
+    def process_result(self):
         try:
             # 큐에서 최신 결과 추출
             while not obj_tcp_queue.empty():
@@ -250,14 +261,14 @@ class ObjectResultProcessor():
                     continue
 
                 # 프레임과 동일한 크기의 빈 overlay 생성
-                mask = np.zeros_like(frame, dtype=np.uint8)
+                mask = np.zeros((256, 512), dtype=np.uint8)
 
                 # detection 결과를 mask에 그림
                 if 'bbox' not in obj_data:
                     continue
                 
                 x1, y1, x2, y2 = obj_data['bbox']
-                class_name = obj_data.get('class_name', 'object')
+                class_id, class_name = obj_data.get('class_id', 'class_name')
 
                 label = f"{class_name}"
                 color = (0, 255, 0)
@@ -266,7 +277,10 @@ class ObjectResultProcessor():
                 cv2.putText(mask, label, (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-                obj_result_queue.put((uuid, mask, class_name))
+                obj_result_queue.put((uuid, mask, class_id))
+
+                # latency_check
+                obj_latency_check[uuid] = time.time()
 
                 # return mask 
 
@@ -280,9 +294,9 @@ class WindowClass(QMainWindow, from_class):
         self.setupUi(self)
         self.setWindowTitle("COVA II")
 
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_video_gui)
-        self.timer.start(33)  # ~30fps
+        # self.timer = QTimer()
+        # self.timer.timeout.connect(self.update_video_gui)
+        # self.timer.start(50)  # ~30fps
 
         # 신호등과 정지선
         self.state = True # Moving
@@ -292,126 +306,88 @@ class WindowClass(QMainWindow, from_class):
         self.tcp_lane_receiver = TcpLaneReceiver()
         self.tcp_obj_receiver = TcpObjReceiver()
         self.lane_result_processor = LaneResultProcessor()
+        self.obj_result_processor = ObjectResultProcessor()
+
 
 
         threading.Thread(target=self.udp_sender.send_frame, daemon=True).start()
         threading.Thread(target=self.tcp_lane_receiver.receive_data, daemon=True).start()
         threading.Thread(target=self.tcp_obj_receiver.receive_data, daemon=True).start()
         threading.Thread(target=self.lane_result_processor.process_result, daemon=True).start()
+        threading.Thread(target=self.obj_result_processor.process_result, daemon=True).start()
 
-    def draw_result_on_frame(self, frame, result_json, obj_result):
-        if not frame.any():
-            return frame
-
-        annotated = frame.copy()
-        try:
-            if "center_line" in result_json:
-                pts = result_json["center_line"]
-                for i in range(len(pts) - 1):
-                    pt1 = tuple(pts[i])
-                    pt2 = tuple(pts[i + 1])
-                    cv2.line(annotated, pt1, pt2, (0, 255, 255), 2)  # Yellow
-
-            if "lanes" in result_json:
-                for lane in result_json["lanes"]:
-                    lane_pts = lane["points"]
-                    color = (255, 255, 255) if lane["class_name"] == "white_solid" else (128, 128, 128)
-                    for i in range(len(lane_pts) - 1):
-                        pt1 = tuple(lane_pts[i])
-                        pt2 = tuple(lane_pts[i + 1])
-                        cv2.line(annotated, pt1, pt2, color, 2)
-
-            # 정지선, 횡단보도 추가
-            if "stop_line" in result_json:
-                pts = result_json["stop_line"]
-                for i in range(len(pts) - 1):
-                    pt1 = tuple(pts[i])
-                    pt2 = tuple(pts[i + 1])
-                    cv2.line(annotated, pt1, pt2, (0, 0, 255), 2)  # Red
-
-            if "crosswalk" in result_json:
-                pts = result_json["crosswalk"]
-                for i in range(len(pts) - 1):
-                    pt1 = tuple(pts[i])
-                    pt2 = tuple(pts[i + 1])
-                if pts and len(pts) > 2: # 점이 세 개 이상 있어야 다각형을 채울 수 있음
-                    cv2.fillPoly(annotated, [np.array(pts, dtype=np.int32)], (0, 255, 0))  # Green
-
-
-            if obj_result is not None and isinstance(obj_result, list):
-                for det in obj_result:
-                    x1, y1, x2, y2 = det["bbox"]
-                    cls_name = det.get("class_name", str(det["class_id"]))
-                    conf = det["confidence"]
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                    label = f"{cls_name} {conf:.2f}"
-                    cv2.putText(annotated, label, (x1, y1 - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                    
-            # # 정지선과의 거리 2.0m 미만이고 빨간불일떄 
-            # self.state = True        
-            # if result_json.get("real_distance") < 2.0 and obj_result.get("class_name") == "vehicle_stop":
-            #     # print("STOP")
-            #     self.state = False
-
-            # if self.state==True and self.prev_state==False:
-            #     # print("GO")
-            #     self.prev_state = self.state
-
-            # angle = result_json.get("steering_angle", 0.0)
-            # cv2.putText(annotated, f"Steering Angle: {angle:.2f}", (10, 30),
-            #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-        except Exception as e:
-            print(f"[DRAW ERROR] {e}")
-
-        return annotated
     
-    def update_video_gui(self):
-        frame = udp_video_queue.get() # uuid, frame
+    # def update_video_gui(self):
+    #     global orig_frame, lane_mask, obj_mask
 
-        lane_result = lane_result_queue.get() # uuid, pred_mask, msg
+    #     if not udp_video_queue.empty():
+    #         frame = udp_video_queue.get() # uuid, frame
 
-        obj_result = obj_tcp_queue.get() # uuid, overlay, cls_name
+    #         orig_frame[frame[0]] = frame[1]
+        
 
+    #     if not lane_result_queue.empty():
+    #         lane_result = lane_result_queue.get() # uuid, pred_mask, msg
 
-        if frame is not None:
-            frame = self.draw_result_on_frame(frame, lane_result, obj_result)
+    #         lane_mask[lane_result[0]] = lane_result[1]
+    #         msg_one_hot_vector = lane_result[2]
 
-            angle = lane_result.get("steering_angle", 0.0)
-            self.label_msg_angle.setText(f"Angle: {angle:.2f}")
+    #     if not obj_result_queue.empty():
+    #         obj_result = obj_tcp_queue.get() # uuid, overlay, cls_id
 
-            real_distance = lane_result.get("real_distance", 0.0)
-            self.state = True        
-            if real_distance < 2.0 and obj_result.get("class_name") == "vehicle_stop":
-                self.label_msg_alert.setText("STOP")
-                self.state = False
-
-            if self.state==True and self.prev_state==False:
-                self.label_msg_alert.setText("GO")
-                self.prev_state = self.state
-
-            # 차선 변경 가능 유무 메세지
-            self.label_msg_lane.setText("차선 변경이 가능합니다")
+    #         obj_mask[obj_result[0]] = obj_result[1]
+    #         cls_id = obj_result[2]
 
 
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb.shape
-        bytes_per_line = ch * w
-        img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(img)
-        self.label_video_lane.setPixmap(pixmap.scaled(
-            self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
 
-    def closeEvent(self, event):
-        self.udp_sender.close()
-        self.tcp_lane_receiver.close()
-        self.tcp_obj_receiver.close()
-        event.accept() # 창 닫기 허용
+    #     if frame is not None:
+            
+
+    #         angle = lane_result.get("steering_angle", 0.0)
+    #         self.label_msg_angle.setText(f"Angle: {angle:.2f}")
+
+    #         real_distance = lane_result.get("real_distance", 0.0)
+    #         self.state = True        
+    #         if real_distance < 2.0 and obj_result.get("class_name") == "vehicle_stop":
+    #             self.label_msg_alert.setText("STOP")
+    #             self.state = False
+
+    #         if self.state==True and self.prev_state==False:
+    #             self.label_msg_alert.setText("GO")
+    #             self.prev_state = self.state
+
+    #         # 차선 변경 가능 유무 메세지
+    #         self.label_msg_lane.setText("차선 변경이 가능합니다")
+
+
+
+    #     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    #     h, w, ch = rgb.shape
+    #     bytes_per_line = ch * w
+    #     img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+    #     pixmap = QPixmap.fromImage(img)
+    #     self.label_video_lane.setPixmap(pixmap.scaled(
+    #         self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
+
+    # def closeEvent(self, event):
+    #     self.udp_sender.close()
+    #     self.tcp_lane_receiver.close()
+    #     self.tcp_obj_receiver.close()
+    #     event.accept() # 창 닫기 허용
 
 # Main
 if __name__ == "__main__":
+    df_orig = pd.DataFrame.from_dict(original_latency_check, orient='index')
+    df_lane = pd.DataFrame.from_dict(lane_latency_check, orient='index')
+    df_obj  = pd.DataFrame.from_dict(obj_latency_check, orient='index')
+
+    df_merged = pd.concat([df_orig, df_lane, df_obj], axis=1)
+    
+    df_merged.to_csv("latency_summary.csv", index_label="uuid")
+
+
+
     app = QApplication(sys.argv)
     myWindows = WindowClass()
     myWindows.show()
