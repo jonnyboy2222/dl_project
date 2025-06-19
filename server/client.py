@@ -18,6 +18,8 @@ from threading import Lock
 
 from distance import estimate_stopline_distance
 
+import base64
+
 # 서버 IP 및 포트 정보
 LANE_SERVER_IP = "192.168.0.252"
 TCP_LANE_PORT = 12345
@@ -139,6 +141,12 @@ class TcpLaneReceiver():
 class LaneResultProcessor():
     def __init__(self):
         pass
+
+    def decode_mask_png_base64(encoded: str) -> np.ndarray:
+        data = base64.b64decode(encoded)
+        nparr = np.frombuffer(data, dtype=np.uint8)
+        mask = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
+        return mask
 
     def process_result(self):
         while True:
