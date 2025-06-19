@@ -5,7 +5,7 @@ import threading
 import time
 import numpy as np
 import sys
-from queue import Queue
+import queue
 import struct
 import atexit
 
@@ -16,7 +16,7 @@ from PyQt6 import uic
 
 from threading import Lock
 
-import distance
+# import distance
 
 # 서버 IP 및 포트 정보
 LANE_SERVER_IP = "192.168.0.252"
@@ -27,13 +27,16 @@ OBJ_SERVER_IP = "192.168.0.102"
 TCP_OBJ_PORT = 12346
 UDP_OBJ_PORT = 54322
 
-latest_frame = None
-latest_lane_result = None
-frame_lock = Lock()
-lane_json_lock = Lock()
+udp_video_queue = queue.Queue()
 
-latest_obj_result = None
-obj_json_lock = Lock()
+lane_tcp_queue = queue.Queue()
+obj_tcp_queue = queue.Queue()
+
+lane_result_queue = queue.Queue()
+
+HEADER_LENGTH = 4
+UUID_LENGTH = 4
+
 
 
 
@@ -47,8 +50,6 @@ class UdpSender():
         self.uuid_counter = 0
 
     def send_frame(self):
-        global latest_frame, frame_lock
-
         self.cap = cv2.VideoCapture(0)
 
         try:
@@ -64,8 +65,7 @@ class UdpSender():
 
                 frame = cv2.resize(frame, (640, 480))
 
-                with frame_lock:
-                    latest_frame = frame.copy()
+                udp_video_queue.put((self.uuid_counter, frame.copy()))
 
                 if not ret:
                     continue
@@ -97,15 +97,20 @@ class TcpLaneReceiver():
         self.tcp_lane.settimeout(1.0)
 
     def receive_data(self):
-        global latest_lane_result, json_lock
         while True:
             try:
                 # 먼저 4바이트 헤더 읽기
-                header = self.tcp_lane.recv(4)
-                if len(header) < 4:
+                header = self.tcp_lane.recv(HEADER_LENGTH)
+                if len(header) < HEADER_LENGTH:
                     raise ValueError("Incomplete header")
 
                 json_len = struct.unpack('>I', header)[0]
+
+                uuid = self.tcp_lane.recv(UUID_LENGTH)
+                if len(uuid) < UUID_LENGTH:
+                    raise ValueError("Incomplete uuid")
+
+                uuid = struct.unpack('>I', uuid)[0]
 
                 # 정확히 그 길이만큼 받기
                 buffer = b''
@@ -115,12 +120,11 @@ class TcpLaneReceiver():
                         raise ConnectionError("Socket closed unexpectedly")
                     buffer += chunk
 
-                json_data = json.loads(buffer.decode('utf-8'))
+                pred_mask = json.loads(buffer.decode('utf-8'))
 
-                with json_lock:
-                    latest_lane_result = json_data
+                lane_tcp_queue.put((uuid, pred_mask))
                 
-                return json_data
+                # return json_data
             
             except Exception as e:
                 print(f"[TCP LANE RECEIVE ERROR] {e}")
@@ -130,7 +134,54 @@ class TcpLaneReceiver():
         if self.tcp_lane is not None:
             self.tcp_lane.close()
             self.tcp_lane = None
-            
+
+class LaneResultProcessor():
+    def __init__(self):
+        pass
+
+    def process_result(self):
+        while True:
+            try:
+                lane_data = lane_tcp_queue.get()[1]
+                
+                if lane_data is None:
+                    continue
+
+                pred_mask = np.array(lane_data["pred_mask"], dtype=np.uint8)
+                h, w = pred_mask.shape
+
+                left_zone = pred_mask[int(h * 0.5):, int(w * 0.2):int(w * 0.4)]
+                right_zone = pred_mask[int(h * 0.5):, int(w * 0.6):int(w * 0.8)]
+
+                can_change_left = np.count_nonzero(left_zone == 2) > 40
+                can_change_right = np.count_nonzero(right_zone == 2) > 40
+
+                stop_line = np.count_nonzero(pred_mask == 4) > 50
+                crosswalk = np.count_nonzero(pred_mask == 5) > 50
+
+                msg = [0, 0, 0, 0, 0]
+                if can_change_left:
+                    msg[0] = 1
+                if can_change_right:
+                    msg[1] = 1
+                if not (can_change_left or can_change_right):
+                    msg[2] = 1
+                if stop_line:
+                    msg[3] = 1
+                if crosswalk:
+                    msg[4] = 1
+
+                lane_result_queue.put(msg)
+
+                return pred_mask
+
+
+            except Exception as e:
+                print(f"[LANE RESULT PROCESS ERROR] {e}")
+                return None
+
+
+
 class TcpObjReceiver():
     def __init__(self):
         self.tcp_obj = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -138,7 +189,6 @@ class TcpObjReceiver():
         self.tcp_obj.settimeout(1.0)
 
     def receive_data(self):
-        global latest_obj_result, obj_json_lock
         while True:
             try:
                 # 먼저 4바이트 헤더 읽기
@@ -158,10 +208,9 @@ class TcpObjReceiver():
 
                 json_data = json.loads(buffer.decode('utf-8'))
 
-                with obj_json_lock:
-                    latest_obj_result = json_data
+                obj_tcp_queue.put(json_data)
                 
-                return json_data
+                # return json_data
             
             except Exception as e:
                 print(f"[TCP OBJ RECEIVE ERROR] {e}")
@@ -191,10 +240,13 @@ class WindowClass(QMainWindow, from_class):
         self.udp_sender = UdpSender()
         self.tcp_lane_receiver = TcpLaneReceiver()
         self.tcp_obj_receiver = TcpObjReceiver()
+        self.lane_result_processor = LaneResultProcessor()
+
 
         threading.Thread(target=self.udp_sender.send_frame, daemon=True).start()
         threading.Thread(target=self.tcp_lane_receiver.receive_data, daemon=True).start()
         threading.Thread(target=self.tcp_obj_receiver.receive_data, daemon=True).start()
+        threading.Thread(target=self.lane_result_processor.process_result, daemon=True).start()
 
     def draw_result_on_frame(self, frame, result_json, obj_result):
         if not frame.any():
@@ -245,19 +297,19 @@ class WindowClass(QMainWindow, from_class):
                     cv2.putText(annotated, label, (x1, y1 - 5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
                     
-            # 정지선과의 거리 2.0m 미만이고 빨간불일떄 
-            self.state = True        
-            if result_json.get("real_distance") < 2.0 and obj_result.get("class_name") == "vehicle_stop":
-                # print("STOP")
-                self.state = False
+            # # 정지선과의 거리 2.0m 미만이고 빨간불일떄 
+            # self.state = True        
+            # if result_json.get("real_distance") < 2.0 and obj_result.get("class_name") == "vehicle_stop":
+            #     # print("STOP")
+            #     self.state = False
 
-            if self.state==True and self.prev_state==False:
-                # print("GO")
-                self.prev_state = self.state
+            # if self.state==True and self.prev_state==False:
+            #     # print("GO")
+            #     self.prev_state = self.state
 
-            angle = result_json.get("steering_angle", 0.0)
-            cv2.putText(annotated, f"Steering Angle: {angle:.2f}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            # angle = result_json.get("steering_angle", 0.0)
+            # cv2.putText(annotated, f"Steering Angle: {angle:.2f}", (10, 30),
+            #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
         except Exception as e:
             print(f"[DRAW ERROR] {e}")
@@ -265,18 +317,12 @@ class WindowClass(QMainWindow, from_class):
         return annotated
     
     def update_video_gui(self):
-        global latest_frame, latest_lane_result, frame_lock, lane_json_lock, latest_obj_result, obj_json_lock
+        frame = udp_video_queue.get()
 
-        with frame_lock:
-            if latest_frame is None:
-                return
-            frame = latest_frame.copy()
+        lane_result = lane_result_queue.get()
 
-        with lane_json_lock:
-            lane_result = latest_lane_result
+        obj_result = obj_tcp_queue.get()
 
-        with obj_json_lock:
-            obj_result = latest_obj_result
 
         if frame is not None:
             frame = self.draw_result_on_frame(frame, lane_result, obj_result)
