@@ -26,7 +26,7 @@ LANE_SERVER_IP = "192.168.0.252"
 TCP_LANE_PORT = 12345
 UDP_LANE_PORT = 54321
 
-OBJ_SERVER_IP = "192.168.0.102"
+OBJ_SERVER_IP = "192.168.0.57"
 TCP_OBJ_PORT = 12346
 UDP_OBJ_PORT = 54322
 
@@ -50,7 +50,7 @@ lane_latency_check = {}
 obj_latency_check = {}
 
 
-from_class = uic.loadUiType("/home/lee/dev_ws/projects/DL_project/gui/client_video.ui")[0]
+from_class = uic.loadUiType("/home/lee/dev_ws/projects/DL_project/final/gui/client_video.ui")[0]
 
 class UdpSender():
     def __init__(self):
@@ -75,6 +75,9 @@ class UdpSender():
 
                 ret, frame = self.cap.read()
 
+                if frame is None:
+                    continue
+
                 frame = cv2.resize(frame, (640, 480))
 
                 if not ret:
@@ -90,9 +93,9 @@ class UdpSender():
 
                     udp_video_queue.put((self.uuid_counter, frame.copy()))
 
-
                     # latency_check
-                    original_latency_check[self.uuid_counter] = time.time()
+                    original_latency_check[self.uuid_counter] = {"start":time.time()}
+                    # print(original_latency_check)
 
                 except Exception as e:
                     print(f"[UDP SEND ERROR] {e}")
@@ -124,6 +127,7 @@ class TcpLaneReceiver():
             try:
                 # 먼저 4바이트 헤더 읽기
                 header = self.tcp_lane.recv(HEADER_LENGTH)
+                
                 if len(header) < HEADER_LENGTH:
                     raise ValueError("Incomplete header")
 
@@ -152,8 +156,8 @@ class TcpLaneReceiver():
                 # base64 → ndarray 변환
                 pred_mask = self.decode_mask_png_base64(result["pred_mask"])
 
-                lane_tcp_queue.put(uuid, pred_mask)
-                
+                lane_tcp_queue.put((uuid, pred_mask))
+                print("lane1 queue insert") # debug
                 
                 # return json_data
             
@@ -173,7 +177,9 @@ class LaneResultProcessor():
     def process_result(self):
         try:
             while not lane_tcp_queue.empty():
-                uuid, pred_mask = lane_tcp_queue.get()
+                lane_data = lane_tcp_queue.get()
+                uuid = lane_data[0]
+                pred_mask = lane_data[1]
                 
                 if pred_mask is None:
                     continue
@@ -188,6 +194,8 @@ class LaneResultProcessor():
 
                 stop_line = np.count_nonzero(pred_mask == 4) > 50
                 crosswalk = np.count_nonzero(pred_mask == 5) > 50
+
+                print(pred_mask) # debug
 
                 msg = [0, 0, 0, 0, 0]
                 if can_change_left:
@@ -204,8 +212,8 @@ class LaneResultProcessor():
                 lane_result_queue.put((uuid, pred_mask, msg))
 
                 # latency_check
-                lane_latency_check[uuid] = time.time()
-
+                lane_latency_check[uuid] = {"lane":time.time()}
+                print("lane2 latency") # debug
                 # return uuid, pred_mask
 
 
@@ -248,6 +256,7 @@ class TcpObjReceiver():
                 json_data = json.loads(buffer.decode('utf-8'))
 
                 obj_tcp_queue.put(uuid, json_data)
+                print("obj queue insert") # debug
                 
                 # return json_data
             
@@ -293,8 +302,8 @@ class ObjectResultProcessor():
                 obj_result_queue.put((uuid, mask, class_id))
 
                 # latency_check
-                obj_latency_check[uuid] = time.time()
-
+                obj_latency_check[uuid] = {"obj":time.time()}
+                print("obj result")
                 # return mask 
 
         except Exception as e:
@@ -304,8 +313,8 @@ class ObjectResultProcessor():
 class WindowClass(QMainWindow, from_class):
     def __init__(self):
         super().__init__()
-        self.setupUi(self)
-        self.setWindowTitle("COVA II")
+        # self.setupUi(self)
+        # self.setWindowTitle("COVA II")
 
         # self.timer = QTimer()
         # self.timer.timeout.connect(self.update_video_gui)
@@ -398,8 +407,6 @@ if __name__ == "__main__":
     df_merged = pd.concat([df_orig, df_lane, df_obj], axis=1)
 
     df_merged.to_csv("latency_summary.csv", index_label="uuid")
-
-
 
     app = QApplication(sys.argv)
     myWindows = WindowClass()
