@@ -125,41 +125,51 @@ class TcpLaneReceiver():
     def receive_data(self):
         while True:
             try:
-                # 먼저 4바이트 헤더 읽기
-                header = self.tcp_lane.recv(HEADER_LENGTH)
+                print("[TCP LANE] receive_data 시작됨")  # 진입 확인
+
+                # 첫 수신 전에 대기하면서 연결 상태 로그 찍기
+                self.tcp_lane.settimeout(5.0)
+                try:
+                    header = self.tcp_lane.recv(HEADER_LENGTH)
+                    print("[TCP LANE] header 수신 성공")
+                except Exception as e:
+                    print(f"[TCP LANE] recv 실패: {e}")
+
+            #     # 먼저 4바이트 헤더 읽기
+            #     header = self.tcp_lane.recv(HEADER_LENGTH)
                 
-                if len(header) < HEADER_LENGTH:
-                    raise ValueError("Incomplete header")
+            #     if len(header) < HEADER_LENGTH:
+            #         raise ValueError("Incomplete header")
 
-                json_len = struct.unpack('>I', header)[0]
+            #     json_len = struct.unpack('>I', header)[0]
 
-                uuid_raw = self.tcp_lane.recv(UUID_LENGTH)
-                if len(uuid_raw) < UUID_LENGTH:
-                    raise ValueError("Incomplete uuid")
+            #     uuid_raw = self.tcp_lane.recv(UUID_LENGTH)
+            #     if len(uuid_raw) < UUID_LENGTH:
+            #         raise ValueError("Incomplete uuid")
 
-                uuid = struct.unpack('>I', uuid_raw)[0]
+            #     uuid = struct.unpack('>I', uuid_raw)[0]
 
-                # 정확히 그 길이만큼 받기
-                buffer = b''
-                while len(buffer) < json_len:
-                    chunk = self.tcp_lane.recv(json_len - len(buffer))
-                    if not chunk:
-                        raise ConnectionError("Socket closed unexpectedly")
-                    buffer += chunk
+            #     # 정확히 그 길이만큼 받기
+            #     buffer = b''
+            #     while len(buffer) < json_len:
+            #         chunk = self.tcp_lane.recv(json_len - len(buffer))
+            #         if not chunk:
+            #             raise ConnectionError("Socket closed unexpectedly")
+            #         buffer += chunk
 
-                result = json.loads(buffer.decode('utf-8'))
+            #     result = json.loads(buffer.decode('utf-8'))
 
-                if "pred_mask" not in result:
-                    print(f"[WARN] pred_mask not in result for UUID {uuid}")
-                    continue
+            #     if "pred_mask" not in result:
+            #         print(f"[WARN] pred_mask not in result for UUID {uuid}")
+            #         continue
 
-                # base64 → ndarray 변환
-                pred_mask = self.decode_mask_png_base64(result["pred_mask"])
+            #     # base64 → ndarray 변환
+            #     pred_mask = self.decode_mask_png_base64(result["pred_mask"])
 
-                lane_tcp_queue.put((uuid, pred_mask))
-                print("lane1 queue insert") # debug
+            #     lane_tcp_queue.put((uuid, pred_mask))
+            #     print("lane1 queue insert") # debug
                 
-                # return json_data
+            #     # return json_data
             
             except Exception as e:
                 print(f"[TCP LANE RECEIVE ERROR] {e}")
@@ -231,38 +241,49 @@ class TcpObjReceiver():
 
     def receive_data(self):
         while True:
+            print("[TCP LANE] receive_data 시작됨")  # 진입 확인
+
+            # 첫 수신 전에 대기하면서 연결 상태 로그 찍기
+            self.tcp_obj.settimeout(5.0)
             try:
-                # 먼저 4바이트 헤더 읽기
                 header = self.tcp_obj.recv(HEADER_LENGTH)
-                if len(header) < 4:
-                    raise ValueError("Incomplete header")
-
-                json_len = struct.unpack('>I', header)[0]
-
-                uuid_raw = self.tcp_obj.recv(UUID_LENGTH)
-                if len(uuid_raw) < UUID_LENGTH:
-                    raise ValueError("Incomplete uuid")
-                
-                uuid = struct.unpack('>I', uuid_raw)[0]
-
-                # 정확히 그 길이만큼 받기
-                buffer = b''
-                while len(buffer) < json_len:
-                    chunk = self.tcp_obj.recv(json_len - len(buffer))
-                    if not chunk:
-                        raise ConnectionError("Socket closed unexpectedly")
-                    buffer += chunk
-
-                json_data = json.loads(buffer.decode('utf-8'))
-
-                obj_tcp_queue.put(uuid, json_data)
-                print("obj queue insert") # debug
-                
-                # return json_data
-            
+                print("[TCP LANE] header 수신 성공")
             except Exception as e:
-                print(f"[TCP OBJ RECEIVE ERROR] {e}")
-                return None
+                print(f"[TCP LANE] recv 실패: {e}")
+
+
+            # try:
+            #     # 먼저 4바이트 헤더 읽기
+            #     header = self.tcp_obj.recv(HEADER_LENGTH)
+            #     if len(header) < 4:
+            #         raise ValueError("Incomplete header")
+
+            #     json_len = struct.unpack('>I', header)[0]
+
+            #     uuid_raw = self.tcp_obj.recv(UUID_LENGTH)
+            #     if len(uuid_raw) < UUID_LENGTH:
+            #         raise ValueError("Incomplete uuid")
+                
+            #     uuid = struct.unpack('>I', uuid_raw)[0]
+
+            #     # 정확히 그 길이만큼 받기
+            #     buffer = b''
+            #     while len(buffer) < json_len:
+            #         chunk = self.tcp_obj.recv(json_len - len(buffer))
+            #         if not chunk:
+            #             raise ConnectionError("Socket closed unexpectedly")
+            #         buffer += chunk
+
+            #     json_data = json.loads(buffer.decode('utf-8'))
+
+            #     obj_tcp_queue.put(uuid, json_data)
+            #     print("obj queue insert") # debug
+                
+            #     # return json_data
+            
+            # except Exception as e:
+            #     print(f"[TCP OBJ RECEIVE ERROR] {e}")
+            #     return None
             
     def close(self):
         if self.tcp_obj is not None:
