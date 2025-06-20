@@ -114,8 +114,9 @@ class TcpLaneReceiver():
     def __init__(self):
         self.tcp_lane = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.tcp_lane.connect((LANE_SERVER_IP, TCP_LANE_PORT))
-        self.tcp_lane.settimeout(1.0)
+        self.tcp_lane.settimeout(5.0)
 
+    @staticmethod
     def decode_mask_png_base64(encoded: str) -> np.ndarray:
         data = base64.b64decode(encoded)
         nparr = np.frombuffer(data, np.uint8)
@@ -126,7 +127,7 @@ class TcpLaneReceiver():
         while True:
             try:
                 # 먼저 4바이트 헤더 읽기
-                print("[TCP] Receiving header...")
+                # print("[TCP] Receiving header...")
                 header = self.tcp_lane.recv(HEADER_LENGTH)
                 
                 if len(header) < HEADER_LENGTH:
@@ -139,7 +140,7 @@ class TcpLaneReceiver():
                     raise ValueError("Incomplete uuid")
 
                 uuid = struct.unpack('>I', uuid_raw)[0]
-                print(f"[TCP] Receiving JSON of length {json_len}, UUID={uuid}")
+                # print(f"[TCP] Receiving JSON of length {json_len}, UUID={uuid}")
 
                 # 정확히 그 길이만큼 받기
                 buffer = b''
@@ -161,12 +162,12 @@ class TcpLaneReceiver():
                 if "pred_mask" not in result:
                     print(f"[WARN] pred_mask not in result for UUID {uuid}")
                     continue
-
+                
                 # base64 → ndarray 변환
                 pred_mask = self.decode_mask_png_base64(result["pred_mask"])
 
                 lane_tcp_queue.put((uuid, pred_mask))
-                print(f"[TCP] lane1 queue insert: uuid={uuid}") # debug
+                # print(f"[TCP] lane1 queue insert: uuid={uuid}") # debug
                 
                 # return json_data
             
@@ -187,45 +188,46 @@ class LaneResultProcessor():
 
     def process_result(self):
         try:
-            while not lane_tcp_queue.empty():
-                lane_data = lane_tcp_queue.get()
-                uuid = lane_data[0]
-                pred_mask = lane_data[1]
-                
-                if pred_mask is None:
-                    continue
+            while True:
+                if not lane_tcp_queue.empty():
+                    lane_data = lane_tcp_queue.get()
+                    uuid = lane_data[0]
+                    pred_mask = lane_data[1]
+                    
+                    if pred_mask is None:
+                        continue
 
-                h, w = pred_mask.shape
+                    h, w = pred_mask.shape
 
-                left_zone = pred_mask[int(h * 0.5):, int(w * 0.2):int(w * 0.4)]
-                right_zone = pred_mask[int(h * 0.5):, int(w * 0.6):int(w * 0.8)]
+                    left_zone = pred_mask[int(h * 0.5):, int(w * 0.2):int(w * 0.4)]
+                    right_zone = pred_mask[int(h * 0.5):, int(w * 0.6):int(w * 0.8)]
 
-                can_change_left = np.count_nonzero(left_zone == 2) > 40
-                can_change_right = np.count_nonzero(right_zone == 2) > 40
+                    can_change_left = np.count_nonzero(left_zone == 2) > 40
+                    can_change_right = np.count_nonzero(right_zone == 2) > 40
 
-                stop_line = np.count_nonzero(pred_mask == 4) > 50
-                crosswalk = np.count_nonzero(pred_mask == 5) > 50
+                    stop_line = np.count_nonzero(pred_mask == 4) > 50
+                    crosswalk = np.count_nonzero(pred_mask == 5) > 50
 
-                print(pred_mask) # debug
+                    # print(pred_mask) # debug
 
-                msg = [0, 0, 0, 0, 0]
-                if can_change_left:
-                    msg[0] = 1
-                if can_change_right:
-                    msg[1] = 1
-                if not (can_change_left or can_change_right):
-                    msg[2] = 1
-                if stop_line:
-                    msg[3] = 1
-                if crosswalk:
-                    msg[4] = 1
+                    msg = [0, 0, 0, 0, 0]
+                    if can_change_left:
+                        msg[0] = 1
+                    if can_change_right:
+                        msg[1] = 1
+                    if not (can_change_left or can_change_right):
+                        msg[2] = 1
+                    if stop_line:
+                        msg[3] = 1
+                    if crosswalk:
+                        msg[4] = 1
 
-                lane_result_queue.put((uuid, pred_mask, msg))
+                    lane_result_queue.put((uuid, pred_mask, msg))
 
-                # latency_check
-                lane_latency_check[uuid] = {"lane":time.time()}
-                print("lane2 latency") # debug
-                # return uuid, pred_mask
+                    # latency_check
+                    lane_latency_check[uuid] = {"lane":time.time()}
+                    # print("lane2 latency") # debug
+                    # return uuid, pred_mask
 
 
         except Exception as e:
@@ -238,7 +240,7 @@ class TcpObjReceiver():
     def __init__(self):
         self.tcp_obj = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.tcp_obj.connect((OBJ_SERVER_IP, TCP_OBJ_PORT))
-        self.tcp_obj.settimeout(1.0)
+        self.tcp_obj.settimeout(5.0)
 
     def receive_data(self):
         while True:
@@ -266,8 +268,8 @@ class TcpObjReceiver():
 
                 json_data = json.loads(buffer.decode('utf-8'))
 
-                obj_tcp_queue.put(uuid, json_data)
-                print("obj queue insert") # debug
+                obj_tcp_queue.put((uuid, json_data))
+                # print("obj queue insert") # debug
                 
                 # return json_data
             
@@ -287,38 +289,51 @@ class ObjectResultProcessor():
     def process_result(self):
         try:
             # 큐에서 최신 결과 추출
-            while not obj_tcp_queue.empty():
-                uuid, obj_data = obj_tcp_queue.get()
+            while True:
+                if not obj_tcp_queue.empty():
+                    obj_tcp_data = obj_tcp_queue.get()
 
-                if obj_data is None:
-                    continue
+                    uuid = obj_tcp_data[0]
+                    obj_data = obj_tcp_data[1][0]
 
-                # 프레임과 동일한 크기의 빈 overlay 생성
-                mask = np.zeros((256, 512), dtype=np.uint8)
+                    if not isinstance(obj_data["bbox"], list):
+                        print('obj is none')
+                        continue
 
-                # detection 결과를 mask에 그림
-                if 'bbox' not in obj_data:
-                    continue
-                
-                x1, y1, x2, y2 = obj_data['bbox']
-                class_id, class_name = obj_data.get('class_id', 'class_name')
+                    # 프레임과 동일한 크기의 빈 overlay 생성
+                    mask = np.zeros((256, 512), dtype=np.uint8)
 
-                label = f"{class_name}"
-                color = (0, 255, 0)
+                    # detection 결과를 mask에 그림
+                    # for obj in obj_data:
+                    #     if obj.get('bbox') is None:
+                    #         print('bbox not in result')
+                    #         continue
+                    if obj_data.get('bbox') == None:
+                        print('bbox not in result')
+                        continue
+                    
+                    x1, y1, x2, y2 = obj_data['bbox']
+                    class_id = obj_data.get('class_id', -1)
+                    class_name = obj_data.get('class_name', 'unknown')
 
-                cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(mask, label, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    label = f"{class_name}"
+                    color = (0, 255, 0)
 
-                obj_result_queue.put((uuid, mask, class_id))
+                    cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
+                    cv2.putText(mask, label, (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-                # latency_check
-                obj_latency_check[uuid] = {"obj":time.time()}
-                print("obj result")
-                # return mask 
+                    obj_result_queue.put((uuid, mask, class_id))
+
+                    # latency_check
+                    obj_latency_check[uuid] = {"obj":time.time()}
+                    # print("obj result")
+                    # return mask 
 
         except Exception as e:
             print(f"[OBJ RESULT PROCESS ERROR] {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
 class WindowClass(QMainWindow, from_class):
