@@ -69,7 +69,10 @@ def udp_video_receiver():
                     continue
 
                 np_data = np.frombuffer(img_data, dtype=np.uint8)
-                frame = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
+                frame_raw = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
+
+                frame = frame_raw.copy()
+
                 if frame is None:
                     continue
 
@@ -94,7 +97,23 @@ def udp_video_receiver():
                         "bbox": [x1, y1, x2, y2]
                     })
 
-                
+                    # 바운딩 박스 그리기
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color=(0, 255, 0), thickness=2)
+
+                    # 라벨 텍스트 생성
+                    cls_name = class_names[cls_id]
+                    label = f"{cls_name} {conf:.2f}"
+
+                    # 텍스트 배경
+                    (text_width, text_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                    cv2.rectangle(frame, (x1, y1 - 20), (x1 + text_width, y1), (0, 255, 0), -1)
+
+                    # 텍스트 쓰기
+                    cv2.putText(frame, label, (x1, y1 - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), thickness=1)
+                    
+                    cv2.imshow("Detections", frame)
+                    cv2.waitKey(10)
 
                 result_bytes = json.dumps(result).encode('utf-8')
                 length = len(result_bytes)
