@@ -6,7 +6,6 @@ import time
 import torch
 from ultralytics import YOLO
 
-
 import json
 import struct
 
@@ -33,7 +32,9 @@ def handle_client(conn, addr):
     with tcp_lock:
         tcp_conn = conn
     try:
-        pass
+        while True:
+            time.sleep(1)
+            
     except Exception as e:
         print(f"[TCP ERROR] {e}")
     finally:
@@ -93,14 +94,16 @@ def udp_video_receiver():
                         "bbox": [x1, y1, x2, y2]
                     })
 
+                
+
                 result_bytes = json.dumps(result).encode('utf-8')
                 length = len(result_bytes)
 
                 header = struct.pack('>I', length)
                 packet = header + uuid + result_bytes
 
-                if uuid % 30 == 0:
-                    print(f"[TCP] Frame UUID: {uuid}")
+                # if uuid % 30 == 0:
+                #     print(f"[TCP] Frame UUID: {uuid}")
 
                 with tcp_lock:
                     if tcp_conn:
