@@ -8,6 +8,7 @@ from process_frame_refactored import process_frame
 from unet2 import UNet
 import json
 import struct
+import base64
 
 
 TCP_SERVER_IP = "0.0.0.0"
@@ -18,9 +19,9 @@ UDP_SERVER_PORT = 54321
 
 
 # 모델 초기화
-model = UNet(num_classes=3)
+model = UNet(num_classes=6)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.load_state_dict(torch.load("/home/john/dev_ws/dl_project/best_model_final.pth", map_location=device))
+model.load_state_dict(torch.load("/home/john/dev_ws/dl_project/cnn/best_model.pth", map_location=device))
 model = model.to(device)
 model.eval()
 
@@ -47,7 +48,8 @@ def handle_client(conn, addr):
     with tcp_lock:
         tcp_conn = conn
     try:
-        pass
+        while True:
+            time.sleep(1)  # 연결을 유지
     except:
         pass
     finally:
@@ -57,6 +59,14 @@ def handle_client(conn, addr):
         conn.close()
         print(f"[TCP] Disconnected from {addr}")
 
+def encode_mask_png_base64(mask: np.ndarray) -> str:
+    if mask.dtype != np.uint8:
+        mask = mask.astype(np.uint8)
+    success, encoded_img = cv2.imencode('.png', mask)
+    if not success:
+        raise ValueError("mask PNG 인코딩 실패")
+    return base64.b64encode(encoded_img).decode('utf-8')
+
 
 def udp_video_receiver():
     global tcp_conn
@@ -64,7 +74,7 @@ def udp_video_receiver():
     udp_server.bind((UDP_SERVER_IP, UDP_SERVER_PORT))
     print(f"[UDP] Server listening on {UDP_SERVER_IP}:{UDP_SERVER_PORT}")
 
-    fps_limit = 30
+    fps_limit = 20
     frame_interval = 1.0 / fps_limit
     prev_time = 0
 
@@ -125,7 +135,11 @@ def udp_video_receiver():
                 else: # pred_mask_from_process is None
                     cv2.imshow(SERVER_ANNOTATED_FRAME_WINDOW_NAME, display_frame)
 
-                cv2.waitKey(1)
+                cv2.waitKey(10)
+
+                # 전처리
+                if "pred_mask" in result:
+                    result["pred_mask"] = encode_mask_png_base64(result["pred_mask"])
 
                 # result_bytes = pack_lane_result(result)
                 result_bytes = json.dumps(result).encode('utf-8')
@@ -134,8 +148,8 @@ def udp_video_receiver():
                 header = struct.pack('>I', length)
                 packet = header + uuid + result_bytes
 
-                if uuid % 30 == 0:
-                    print(f"[TCP] Frame UUID: {uuid}")
+                # if uuid % 30 == 0:
+                #     print(f"[TCP] Frame UUID: {uuid}")
 
                 with tcp_lock:
                     if tcp_conn:
