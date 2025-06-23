@@ -26,7 +26,7 @@ LANE_SERVER_IP = "192.168.0.252"
 TCP_LANE_PORT = 12345
 UDP_LANE_PORT = 54321
 
-OBJ_SERVER_IP = "192.168.0.57"
+OBJ_SERVER_IP = "192.168.0.55"
 TCP_OBJ_PORT = 12346
 UDP_OBJ_PORT = 54322
 
@@ -62,7 +62,8 @@ class UdpSender():
     def send_frame(self):
         global original_latency_check
 
-        self.cap = cv2.VideoCapture(0)
+        # self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture("/home/lee/dev_ws/projects/DL_project/final/server/sample_video.mp4")
 
         try:
             if not self.cap.isOpened():
@@ -78,7 +79,7 @@ class UdpSender():
                 if frame is None:
                     continue
 
-                frame = cv2.resize(frame, (640, 480))
+                frame = cv2.resize(frame, (512, 256))
 
                 if not ret:
                     continue
@@ -91,6 +92,7 @@ class UdpSender():
                     self.udp_lane.sendto(uuid_msg + b'||' + buffer.tobytes(), (LANE_SERVER_IP, UDP_LANE_PORT))
                     self.udp_obj.sendto(uuid_msg + b'||' + buffer.tobytes(), (OBJ_SERVER_IP, UDP_OBJ_PORT))
 
+                    # print("origin:", type(frame)) # debug
                     udp_video_queue.put((self.uuid_counter, frame.copy()))
 
                     # latency_check
@@ -99,6 +101,9 @@ class UdpSender():
 
                 except Exception as e:
                     print(f"[UDP SEND ERROR] {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return None
         finally:
             self.cap.release()
 
@@ -107,8 +112,6 @@ class UdpSender():
         self.udp_lane.close()
         self.udp_obj.close()
         self.cap.release()
-
-
 
 class TcpLaneReceiver():
     def __init__(self):
@@ -222,6 +225,7 @@ class LaneResultProcessor():
                     if crosswalk:
                         msg[4] = 1
 
+                    # print("lane:",type(pred_mask)) # debug
                     lane_result_queue.put((uuid, pred_mask, msg))
 
                     # latency_check
@@ -235,7 +239,6 @@ class LaneResultProcessor():
             return None
 
 
-
 class TcpObjReceiver():
     def __init__(self):
         self.tcp_obj = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -247,6 +250,7 @@ class TcpObjReceiver():
             try:
                 # 먼저 4바이트 헤더 읽기
                 header = self.tcp_obj.recv(HEADER_LENGTH)
+                # print(header)
                 if len(header) < 4:
                     raise ValueError("Incomplete header")
 
@@ -291,6 +295,7 @@ class ObjectResultProcessor():
             # 큐에서 최신 결과 추출
             while True:
                 if not obj_tcp_queue.empty():
+                    # print("check")
                     obj_tcp_data = obj_tcp_queue.get()
 
                     uuid = obj_tcp_data[0]
@@ -323,6 +328,7 @@ class ObjectResultProcessor():
                     cv2.putText(mask, label, (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
+                    # print("obj: ",type(mask)) # debug
                     obj_result_queue.put((uuid, mask, class_id))
 
                     # latency_check
@@ -356,67 +362,66 @@ class WindowClass(QMainWindow, from_class):
         self.lane_result_processor = LaneResultProcessor()
         self.obj_result_processor = ObjectResultProcessor()
 
-
-
         threading.Thread(target=self.udp_sender.send_frame, daemon=True).start()
         threading.Thread(target=self.tcp_lane_receiver.receive_data, daemon=True).start()
         threading.Thread(target=self.tcp_obj_receiver.receive_data, daemon=True).start()
         threading.Thread(target=self.lane_result_processor.process_result, daemon=True).start()
         threading.Thread(target=self.obj_result_processor.process_result, daemon=True).start()
 
-    
-    def overlay_mask(frame, mask, color, alpha=0.5):
-        if mask is None:
-            return frame
-
-        if len(mask.shape) == 2:
-            mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-
-        overlay = np.zeros_like(frame, dtype=np.uint8)
-        overlay[:] = color
-
-        mask_bool = mask[:, :, 0] > 0 
-        combined = frame.copy()
-        combined[mask_bool] = cv2.addWeighted(frame[mask_bool], 1 - alpha, overlay[mask_bool], alpha, 0)
-
-        return combined
-
-
     def update_video_gui(self):
         global orig_frame, lane_mask, obj_mask
 
-        if not orig_frame.empty():
-            frame_item = orig_frame.get() 
+        if not udp_video_queue.empty():
+            frame_item = udp_video_queue.get_nowait()
             orig_frame[frame_item[0]] = frame_item[1]
+            # print(frame_item[1][0].shape())
 
         if not lane_result_queue.empty():
-            lane_result = lane_result_queue.get()  
+            lane_result = lane_result_queue.get_nowait()  
             lane_mask[lane_result[0]] = lane_result[1]
+            # print(lane_result[1][0].shape())
 
         if not obj_result_queue.empty():
-            obj_result = obj_result_queue.get() 
+            obj_result = obj_result_queue.get_nowait() 
             obj_mask[obj_result[0]] = obj_result[1]
+            # print(obj_result[1][0].shape())
 
         for uuid in orig_frame.keys():
             frame = orig_frame[uuid].copy()
 
+            print("orig_frame:", orig_frame[uuid].shape, frame.dtype)
+            # print("lane_mask:", lane_mask[uuid].shape, lane_mask[uuid].dtype)
+            # print("obj_mask:", obj_mask[uuid].shape, obj_mask[uuid].dtype)
+
             if uuid in lane_mask:
-                frame = self.overlay_mask(frame, lane_mask[uuid], color=(0, 255, 0), alpha=0.4)  
+                # frame = self.overlay_mask(frame, lane_mask[uuid])
+                print("lane_mask:", lane_mask[uuid].shape, lane_mask[uuid].dtype)
+                if len(lane_mask[uuid].shape) == 2:
+                    lane_mask[uuid] = cv2.cvtColor(lane_mask[uuid], cv2.COLOR_GRAY2BGR)
+                frame = cv2.addWeighted(frame, 0.7, lane_mask[uuid], 0.3, 0)
+            else:
+                continue
 
             if uuid in obj_mask:
-                frame = self.overlay_mask(frame, obj_mask[uuid], color=(0, 0, 255), alpha=0.4)  
+                # frame = self.overlay_mask(frame, obj_mask[uuid])
+                print("obj_mask:", obj_mask[uuid].shape, obj_mask[uuid].dtype)
+                if len(obj_mask[uuid].shape) == 2:
+                    obj_mask[uuid] = cv2.cvtColor(obj_mask[uuid], cv2.COLOR_GRAY2BGR)  
+                frame = cv2.addWeighted(frame, 0.7, obj_mask[uuid], 0.3, 0)
+            else:
+                continue
 
-            cv2.imshow(f"Frame-{uuid}", frame)
-            cv2.waitKey(1)
+            cv2.imshow(f"Frame", frame)
+            cv2.waitKey(10)
 
 
-    #     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    #     h, w, ch = rgb.shape
-    #     bytes_per_line = ch * w
-    #     img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-    #     pixmap = QPixmap.fromImage(img)
-    #     self.label_video_lane.setPixmap(pixmap.scaled(
-    #         self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
+            # rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # h, w, ch = rgb.shape
+            # bytes_per_line = ch * w
+            # img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+            # pixmap = QPixmap.fromImage(img)
+            # self.label_video_lane.setPixmap(pixmap.scaled(
+            #     self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
 
     def closeEvent(self, event):
         self.udp_sender.close()
