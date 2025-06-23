@@ -128,6 +128,11 @@ def udp_video_receiver():
                                                         (display_frame.shape[1], display_frame.shape[0]), 
                                                         interpolation=cv2.INTER_NEAREST)
                     
+                    result_resized = {
+                        "pred_mask": resized_colorized_mask
+                    
+                    }
+
                     # Blend display_frame with the resized_colorized_mask
                     blended_frame = cv2.addWeighted(display_frame, 0.7, resized_colorized_mask, 0.3, 0.0)
                     cv2.imshow(SERVER_ANNOTATED_FRAME_WINDOW_NAME, blended_frame)
@@ -147,6 +152,15 @@ def udp_video_receiver():
 
                 header = struct.pack('>I', length)
                 packet = header + uuid + result_bytes
+
+                # if "pred_mask" in result_resized:
+                #     result_resized["pred_mask"] = encode_mask_png_base64(result_resized["pred_mask"])
+
+                # result_bytes = json.dumps(result_resized).encode('utf-8')
+                # length = len(result_bytes)
+
+                # header = struct.pack('>I', length)
+                # packet = header + uuid + result_bytes
 
                 # if uuid % 30 == 0:
                 #     print(f"[TCP] Frame UUID: {uuid}")
