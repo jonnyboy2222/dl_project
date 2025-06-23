@@ -226,12 +226,6 @@ class LaneResultProcessor():
                     if crosswalk:
                         msg[4] = 1
 
-                    # print("lane:",type(pred_mask)) # debug
-                    # lane = pred_mask
-                    # print(lane.shape, lane.dtype, np.min(lane), np.max(lane))
-                    # cv2.imshow("Lane", lane)  # 디버깅용
-                    # cv2.waitKey(0)
-
                     lane_result_queue.put((uuid, pred_mask, msg))
 
                     # latency_check
@@ -384,49 +378,76 @@ class WindowClass(QMainWindow, from_class):
 
     def update_video_gui(self):
         global orig_frame, lane_mask, obj_mask
+
         uuid = None
+
         if not udp_video_queue.empty():
-            frame_item = udp_video_queue.get_nowait()
-            orig_frame[frame_item[0]] = frame_item[1]
-            uuid = list(orig_frame.keys())[-1]
-        # 마스크 업데이트
-        if not lane_result_queue.empty():
-            lane_result = lane_result_queue.get_nowait()
-            lane_mask[lane_result[0]] = lane_result[1]
-        if not obj_result_queue.empty():
-            obj_result = obj_result_queue.get_nowait()
-            obj_mask[obj_result[0]] = obj_result[1]
-        # 실제 렌더링
+            uuid, frame = udp_video_queue.get_nowait()
+            orig_frame[uuid] = frame
+            lane = None
+            obj = None
+
+            if not lane_result_queue.empty():
+                while not lane_result_queue.empty():
+                    lane_result = lane_result_queue.get_nowait()
+                    lane_mask[lane_result[0]] = lane_result[1]
+                # lane = lane_mask.get(uuid)
+
+            if not obj_result_queue.empty():
+                while not obj_result_queue.empty():
+                    obj_result = obj_result_queue.get_nowait()
+                    obj_mask[obj_result[0]] = obj_result[1]
+                # obj = obj_mask.get(uuid)
+
         if uuid is not None and uuid in orig_frame:
+            # print("orig uuid : ", uuid)
             frame = orig_frame[uuid].copy()
-            # 마스크 도착 여부 확인
-            has_lane = uuid in lane_mask
-            has_obj = uuid in obj_mask
-            if has_lane or has_obj:
-                if has_lane:
-                    lane = lane_mask[uuid]
-                    if len(lane.shape) == 2:
-                        lane = cv2.cvtColor(lane, cv2.COLOR_GRAY2BGR)
-                    frame = cv2.addWeighted(frame, 0.7, lane, 0.3, 0.0)
-                if has_obj:
-                    obj = obj_mask[uuid]
-                    if len(obj.shape) == 2:
-                        obj = cv2.cvtColor(obj, cv2.COLOR_GRAY2BGR)
-                    frame = cv2.addWeighted(frame, 0.7, obj, 0.3, 0.0)
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb_frame.shape
-                bytes_per_line = ch * w
-                img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-                self.last_rendered_pixmap = QPixmap.fromImage(img)  # 캐시 저장
-            # 이전 결과 사용
-            if self.last_rendered_pixmap:
-                self.label_video_lane.setPixmap(
-                    self.last_rendered_pixmap.scaled(
-                        self.label_video_lane.width(),
-                        self.label_video_lane.height(),
-                        Qt.AspectRatioMode.KeepAspectRatio
-                    )
-                )
+            # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            if uuid in list(lane_mask.keys()):
+                # print("lane uuid : ", uuid)
+                lane = lane_mask[uuid]
+                # print(np.unique(lane_mask[uuid]))
+                if len(lane.shape) == 2:  # grayscale mask
+                    lane = self.colorize_mask_lane(lane)
+                    self.prev_lane_mask = lane
+                frame = cv2.addWeighted(frame, 0.8, lane, 0.2, 0.0)
+
+            elif self.prev_lane_mask is not None:
+                lane = self.prev_lane_mask
+
+                frame = cv2.addWeighted(frame, 0.8, lane, 0.2, 0.0)
+                
+
+                
+
+            if uuid in list(obj_mask.keys()):
+                # print("obj uuid : ", uuid)
+                obj = obj_mask[uuid]
+
+                self.prev_obj_mask = obj
+
+                frame = cv2.addWeighted(frame, 0.8, obj, 0.2, 0.0)
+
+            elif self.prev_obj_mask is not None:
+                obj = self.prev_obj_mask
+
+                frame = cv2.addWeighted(frame, 0.8, obj, 0.2, 0.0)
+
+
+                
+                
+
+            # OpenCV BGR → Qt RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_frame.shape
+            bytes_per_line = ch * w
+
+            # QImage 생성 및 QLabel에 설정
+            img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(img)
+            self.label_video_lane.setPixmap(pixmap.scaled(
+                self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
 
     def closeEvent(self, event):
         self.udp_sender.close()
