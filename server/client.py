@@ -195,7 +195,7 @@ class LaneResultProcessor():
                 if not lane_tcp_queue.empty():
                     lane_data = lane_tcp_queue.get_nowait()
                     uuid = lane_data[0]
-                    print("lane uuid : ", uuid) # debug
+                    # print("lane uuid : ", uuid) # debug
                     pred_mask = lane_data[1]
                     
                     if pred_mask is None:
@@ -300,7 +300,7 @@ class ObjectResultProcessor():
                     obj_tcp_data = obj_tcp_queue.get_nowait()
 
                     uuid = obj_tcp_data[0]
-                    print("obj uuid : ", uuid) # debug
+                    # print("obj uuid : ", uuid) # debug
                     obj_data = obj_tcp_data[1][0]
 
                     if not isinstance(obj_data["bbox"], list):
@@ -354,7 +354,7 @@ class WindowClass(QMainWindow, from_class):
         self.timer.timeout.connect(self.update_video_gui)
         self.timer.start(50)  # ~30fps
 
-        self.uuid = 1
+        # self.uuid = 1
 
         # 신호등과 정지선
         self.state = True # Moving
@@ -375,58 +375,46 @@ class WindowClass(QMainWindow, from_class):
     def update_video_gui(self):
         global orig_frame, lane_mask, obj_mask
 
+        uuid = None
+
         if not udp_video_queue.empty():
             frame_item = udp_video_queue.get_nowait()
             orig_frame[frame_item[0]] = frame_item[1]
-            # print(frame_item[1][0].shape())
+            uuid = list(orig_frame.keys())[-1]
 
         if not lane_result_queue.empty():
-            lane_result = lane_result_queue.get_nowait()  
+            lane_result = lane_result_queue.get_nowait()
             lane_mask[lane_result[0]] = lane_result[1]
-            # print(lane_result[1][0].shape())
 
         if not obj_result_queue.empty():
-            obj_result = obj_result_queue.get_nowait() 
+            obj_result = obj_result_queue.get_nowait()
             obj_mask[obj_result[0]] = obj_result[1]
-            # print(obj_result[1][0].shape())
 
-        for uuid in orig_frame.keys():
+        if uuid is not None and uuid in orig_frame:
             frame = orig_frame[uuid].copy()
-            print("uuid:", uuid) #debug
-
-            print("orig_frame:", orig_frame[uuid].shape, frame.dtype)
-            # print("lane_mask:", lane_mask[uuid].shape, lane_mask[uuid].dtype)
-            # print("obj_mask:", obj_mask[uuid].shape, obj_mask[uuid].dtype)
 
             if uuid in lane_mask:
-                # frame = self.overlay_mask(frame, lane_mask[uuid])
-                print("lane_mask:", lane_mask[uuid].shape, lane_mask[uuid].dtype)
-                if len(lane_mask[uuid].shape) == 2:
-                    lane_mask[uuid] = cv2.cvtColor(lane_mask[uuid], cv2.COLOR_GRAY2BGR)
-                frame = cv2.addWeighted(frame, 0.7, lane_mask[uuid], 0.3, 0)
-            else:
-                continue
+                lane = lane_mask[uuid]
+                if len(lane.shape) == 2:  # grayscale mask
+                    lane = cv2.cvtColor(lane, cv2.COLOR_GRAY2BGR)
+                frame = cv2.addWeighted(frame, 0.7, lane, 0.3, 0.0)
 
             if uuid in obj_mask:
-                # frame = self.overlay_mask(frame, obj_mask[uuid])
-                print("obj_mask:", obj_mask[uuid].shape, obj_mask[uuid].dtype)
-                if len(obj_mask[uuid].shape) == 2:
-                    obj_mask[uuid] = cv2.cvtColor(obj_mask[uuid], cv2.COLOR_GRAY2BGR)  
-                frame = cv2.addWeighted(frame, 0.7, obj_mask[uuid], 0.3, 0)
-            else:
-                continue
+                obj = obj_mask[uuid]
+                if len(obj.shape) == 2:
+                    obj = cv2.cvtColor(obj, cv2.COLOR_GRAY2BGR)
+                frame = cv2.addWeighted(frame, 0.7, obj, 0.3, 0.0)
 
-            cv2.imshow(f"Frame", frame)
-            cv2.waitKey(10)
+            # OpenCV BGR → Qt RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_frame.shape
+            bytes_per_line = ch * w
 
-
-            # rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            # h, w, ch = rgb.shape
-            # bytes_per_line = ch * w
-            # img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-            # pixmap = QPixmap.fromImage(img)
-            # self.label_video_lane.setPixmap(pixmap.scaled(
-            #     self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
+            # QImage 생성 및 QLabel에 설정
+            img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(img)
+            self.label_video_lane.setPixmap(pixmap.scaled(
+                self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
 
     def closeEvent(self, event):
         self.udp_sender.close()
