@@ -339,12 +339,12 @@ class ObjectResultProcessor():
 class WindowClass(QMainWindow, from_class):
     def __init__(self):
         super().__init__()
-        # self.setupUi(self)
-        # self.setWindowTitle("COVA II")
+        self.setupUi(self)
+        self.setWindowTitle("COVA II")
 
-        # self.timer = QTimer()
-        # self.timer.timeout.connect(self.update_video_gui)
-        # self.timer.start(50)  # ~30fps
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_video_gui)
+        self.timer.start(50)  # ~30fps
 
         # 신호등과 정지선
         self.state = True # Moving
@@ -365,49 +365,49 @@ class WindowClass(QMainWindow, from_class):
         threading.Thread(target=self.obj_result_processor.process_result, daemon=True).start()
 
     
-    # def update_video_gui(self):
-    #     global orig_frame, lane_mask, obj_mask
+    def overlay_mask(frame, mask, color, alpha=0.5):
+        if mask is None:
+            return frame
 
-    #     if not udp_video_queue.empty():
-    #         frame = udp_video_queue.get() # uuid, frame
+        if len(mask.shape) == 2:
+            mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
 
-    #         orig_frame[frame[0]] = frame[1]
-        
+        overlay = np.zeros_like(frame, dtype=np.uint8)
+        overlay[:] = color
 
-    #     if not lane_result_queue.empty():
-    #         lane_result = lane_result_queue.get() # uuid, pred_mask, msg
+        mask_bool = mask[:, :, 0] > 0 
+        combined = frame.copy()
+        combined[mask_bool] = cv2.addWeighted(frame[mask_bool], 1 - alpha, overlay[mask_bool], alpha, 0)
 
-    #         lane_mask[lane_result[0]] = lane_result[1]
-    #         msg_one_hot_vector = lane_result[2]
-
-    #     if not obj_result_queue.empty():
-    #         obj_result = obj_tcp_queue.get() # uuid, overlay, cls_id
-
-    #         obj_mask[obj_result[0]] = obj_result[1]
-    #         cls_id = obj_result[2]
+        return combined
 
 
+    def update_video_gui(self):
+        global orig_frame, lane_mask, obj_mask
 
+        if not orig_frame.empty():
+            frame_item = orig_frame.get() 
+            orig_frame[frame_item[0]] = frame_item[1]
 
-    #     if frame is not None:
-            
+        if not lane_result_queue.empty():
+            lane_result = lane_result_queue.get()  
+            lane_mask[lane_result[0]] = lane_result[1]
 
-    #         angle = lane_result.get("steering_angle", 0.0)
-    #         self.label_msg_angle.setText(f"Angle: {angle:.2f}")
+        if not obj_result_queue.empty():
+            obj_result = obj_result_queue.get() 
+            obj_mask[obj_result[0]] = obj_result[1]
 
-    #         real_distance = lane_result.get("real_distance", 0.0)
-    #         self.state = True        
-    #         if real_distance < 2.0 and obj_result.get("class_name") == "vehicle_stop":
-    #             self.label_msg_alert.setText("STOP")
-    #             self.state = False
+        for uuid in orig_frame.keys():
+            frame = orig_frame[uuid].copy()
 
-    #         if self.state==True and self.prev_state==False:
-    #             self.label_msg_alert.setText("GO")
-    #             self.prev_state = self.state
+            if uuid in lane_mask:
+                frame = self.overlay_mask(frame, lane_mask[uuid], color=(0, 255, 0), alpha=0.4)  
 
-    #         # 차선 변경 가능 유무 메세지
-    #         self.label_msg_lane.setText("차선 변경이 가능합니다")
+            if uuid in obj_mask:
+                frame = self.overlay_mask(frame, obj_mask[uuid], color=(0, 0, 255), alpha=0.4)  
 
+            cv2.imshow(f"Frame-{uuid}", frame)
+            cv2.waitKey(1)
 
 
     #     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -418,11 +418,11 @@ class WindowClass(QMainWindow, from_class):
     #     self.label_video_lane.setPixmap(pixmap.scaled(
     #         self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
 
-    # def closeEvent(self, event):
-    #     self.udp_sender.close()
-    #     self.tcp_lane_receiver.close()
-    #     self.tcp_obj_receiver.close()
-    #     event.accept() # 창 닫기 허용
+    def closeEvent(self, event):
+        self.udp_sender.close()
+        self.tcp_lane_receiver.close()
+        self.tcp_obj_receiver.close()
+        event.accept() # 창 닫기 허용
 
 # Main
 if __name__ == "__main__":
