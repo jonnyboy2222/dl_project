@@ -26,7 +26,7 @@ LANE_SERVER_IP = "192.168.0.252"
 TCP_LANE_PORT = 12345
 UDP_LANE_PORT = 54321
 
-OBJ_SERVER_IP = "192.168.0.55"
+OBJ_SERVER_IP = "192.168.0.57"
 TCP_OBJ_PORT = 12346
 UDP_OBJ_PORT = 54322
 
@@ -227,13 +227,17 @@ class LaneResultProcessor():
                         msg[4] = 1
 
                     # print("lane:",type(pred_mask)) # debug
+                    # lane = pred_mask
+                    # print(lane.shape, lane.dtype, np.min(lane), np.max(lane))
+                    # cv2.imshow("Lane", lane)  # 디버깅용
+                    # cv2.waitKey(0)
+
                     lane_result_queue.put((uuid, pred_mask, msg))
 
                     # latency_check
                     lane_latency_check[uuid] = {"lane":time.time()}
                     # print("lane2 latency") # debug
                     # return uuid, pred_mask
-
 
         except Exception as e:
             print(f"[LANE RESULT PROCESS ERROR] {e}")
@@ -301,34 +305,24 @@ class ObjectResultProcessor():
 
                     uuid = obj_tcp_data[0]
                     # print("obj uuid : ", uuid) # debug
-                    obj_data = obj_tcp_data[1][0]
 
-                    if not isinstance(obj_data["bbox"], list):
-                        print('obj is none')
-                        continue
+                    mask = np.zeros((256, 512, 3), dtype=np.uint8)
 
-                    # 프레임과 동일한 크기의 빈 overlay 생성
-                    mask = np.zeros((256, 512), dtype=np.uint8)
+                    for obj_data in obj_tcp_data[1]:
+                        if not isinstance(obj_data["bbox"], list):
+                            print('obj is none')
+                            continue
+                        
+                        x1, y1, x2, y2 = obj_data['bbox']
+                        class_id = obj_data.get('class_id', -1)
+                        class_name = obj_data.get('class_name', 'unknown')
 
-                    # detection 결과를 mask에 그림
-                    # for obj in obj_data:
-                    #     if obj.get_nowait('bbox') is None:
-                    #         print('bbox not in result')
-                    #         continue
-                    if obj_data.get('bbox') == None:
-                        print('bbox not in result')
-                        continue
-                    
-                    x1, y1, x2, y2 = obj_data['bbox']
-                    class_id = obj_data.get('class_id', -1)
-                    class_name = obj_data.get('class_name', 'unknown')
+                        label = f"{class_name}"
+                        color = (0, 255, 0)
 
-                    label = f"{class_name}"
-                    color = (0, 255, 0)
-
-                    cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(mask, label, (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
+                        cv2.putText(mask, label, (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
                     # print("obj: ",type(mask)) # debug
                     obj_result_queue.put((uuid, mask, class_id))
@@ -354,7 +348,8 @@ class WindowClass(QMainWindow, from_class):
         self.timer.timeout.connect(self.update_video_gui)
         self.timer.start(50)  # ~30fps
 
-        # self.uuid = 1
+        self.prev_lane_mask = None
+        self.prev_obj_mask = None
 
         # 신호등과 정지선
         self.state = True # Moving
@@ -372,49 +367,66 @@ class WindowClass(QMainWindow, from_class):
         threading.Thread(target=self.lane_result_processor.process_result, daemon=True).start()
         threading.Thread(target=self.obj_result_processor.process_result, daemon=True).start()
 
+        self.lane_color = {
+            0: [0, 0, 0],         # 배경 - 검정
+            1: [255, 255, 255],   # 흰색 실선 - 흰색
+            2: [128, 128, 128],   # 흰색 점선 - 회색
+            3: [0, 255, 255],     # 중앙선(노란 실선) - 노랑
+            4: [0, 0, 255],       # 정지선 - 빨강
+            5: [0, 255, 0],       # 횡단보도 - 초록
+        }
+
+    def colorize_mask_lane(self, mask):
+        color_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+        for k, color in self.lane_color.items():
+            color_mask[mask == k] = color
+        return color_mask
+
     def update_video_gui(self):
         global orig_frame, lane_mask, obj_mask
-
         uuid = None
-
         if not udp_video_queue.empty():
             frame_item = udp_video_queue.get_nowait()
             orig_frame[frame_item[0]] = frame_item[1]
             uuid = list(orig_frame.keys())[-1]
-
+        # 마스크 업데이트
         if not lane_result_queue.empty():
             lane_result = lane_result_queue.get_nowait()
             lane_mask[lane_result[0]] = lane_result[1]
-
         if not obj_result_queue.empty():
             obj_result = obj_result_queue.get_nowait()
             obj_mask[obj_result[0]] = obj_result[1]
-
+        # 실제 렌더링
         if uuid is not None and uuid in orig_frame:
             frame = orig_frame[uuid].copy()
-
-            if uuid in lane_mask:
-                lane = lane_mask[uuid]
-                if len(lane.shape) == 2:  # grayscale mask
-                    lane = cv2.cvtColor(lane, cv2.COLOR_GRAY2BGR)
-                frame = cv2.addWeighted(frame, 0.7, lane, 0.3, 0.0)
-
-            if uuid in obj_mask:
-                obj = obj_mask[uuid]
-                if len(obj.shape) == 2:
-                    obj = cv2.cvtColor(obj, cv2.COLOR_GRAY2BGR)
-                frame = cv2.addWeighted(frame, 0.7, obj, 0.3, 0.0)
-
-            # OpenCV BGR → Qt RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb_frame.shape
-            bytes_per_line = ch * w
-
-            # QImage 생성 및 QLabel에 설정
-            img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(img)
-            self.label_video_lane.setPixmap(pixmap.scaled(
-                self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
+            # 마스크 도착 여부 확인
+            has_lane = uuid in lane_mask
+            has_obj = uuid in obj_mask
+            if has_lane or has_obj:
+                if has_lane:
+                    lane = lane_mask[uuid]
+                    if len(lane.shape) == 2:
+                        lane = cv2.cvtColor(lane, cv2.COLOR_GRAY2BGR)
+                    frame = cv2.addWeighted(frame, 0.7, lane, 0.3, 0.0)
+                if has_obj:
+                    obj = obj_mask[uuid]
+                    if len(obj.shape) == 2:
+                        obj = cv2.cvtColor(obj, cv2.COLOR_GRAY2BGR)
+                    frame = cv2.addWeighted(frame, 0.7, obj, 0.3, 0.0)
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb_frame.shape
+                bytes_per_line = ch * w
+                img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                self.last_rendered_pixmap = QPixmap.fromImage(img)  # 캐시 저장
+            # 이전 결과 사용
+            if self.last_rendered_pixmap:
+                self.label_video_lane.setPixmap(
+                    self.last_rendered_pixmap.scaled(
+                        self.label_video_lane.width(),
+                        self.label_video_lane.height(),
+                        Qt.AspectRatioMode.KeepAspectRatio
+                    )
+                )
 
     def closeEvent(self, event):
         self.udp_sender.close()
