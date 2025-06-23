@@ -193,7 +193,7 @@ class LaneResultProcessor():
         try:
             while True:
                 if not lane_tcp_queue.empty():
-                    lane_data = lane_tcp_queue.get()
+                    lane_data = lane_tcp_queue.get_nowait()
                     uuid = lane_data[0]
                     pred_mask = lane_data[1]
                     
@@ -296,7 +296,7 @@ class ObjectResultProcessor():
             while True:
                 if not obj_tcp_queue.empty():
                     # print("check")
-                    obj_tcp_data = obj_tcp_queue.get()
+                    obj_tcp_data = obj_tcp_queue.get_nowait()
 
                     uuid = obj_tcp_data[0]
                     obj_data = obj_tcp_data[1][0]
@@ -310,7 +310,7 @@ class ObjectResultProcessor():
 
                     # detection 결과를 mask에 그림
                     # for obj in obj_data:
-                    #     if obj.get('bbox') is None:
+                    #     if obj.get_nowait('bbox') is None:
                     #         print('bbox not in result')
                     #         continue
                     if obj_data.get('bbox') == None:
