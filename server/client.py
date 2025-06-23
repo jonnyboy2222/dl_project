@@ -195,6 +195,7 @@ class LaneResultProcessor():
                 if not lane_tcp_queue.empty():
                     lane_data = lane_tcp_queue.get_nowait()
                     uuid = lane_data[0]
+                    print("lane uuid : ", uuid) # debug
                     pred_mask = lane_data[1]
                     
                     if pred_mask is None:
@@ -299,6 +300,7 @@ class ObjectResultProcessor():
                     obj_tcp_data = obj_tcp_queue.get_nowait()
 
                     uuid = obj_tcp_data[0]
+                    print("obj uuid : ", uuid) # debug
                     obj_data = obj_tcp_data[1][0]
 
                     if not isinstance(obj_data["bbox"], list):
@@ -352,6 +354,8 @@ class WindowClass(QMainWindow, from_class):
         self.timer.timeout.connect(self.update_video_gui)
         self.timer.start(50)  # ~30fps
 
+        self.uuid = 1
+
         # 신호등과 정지선
         self.state = True # Moving
         self.prev_state = True
@@ -388,6 +392,7 @@ class WindowClass(QMainWindow, from_class):
 
         for uuid in orig_frame.keys():
             frame = orig_frame[uuid].copy()
+            print("uuid:", uuid) #debug
 
             print("orig_frame:", orig_frame[uuid].shape, frame.dtype)
             # print("lane_mask:", lane_mask[uuid].shape, lane_mask[uuid].dtype)
