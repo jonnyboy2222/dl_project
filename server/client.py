@@ -16,10 +16,13 @@ from PyQt6 import uic
 
 from threading import Lock
 
-from distance import estimate_stopline_distance
+from distance import estimate_distance
 
 import base64
 import pandas as pd
+
+from multiprocessing import Process, Queue
+
 
 # 서버 IP 및 포트 정보
 LANE_SERVER_IP = "192.168.0.252"
@@ -35,8 +38,11 @@ udp_video_queue = queue.Queue()
 lane_tcp_queue = queue.Queue()
 obj_tcp_queue = queue.Queue()
 
-lane_result_queue = queue.Queue()
-obj_result_queue = queue.Queue()
+# lane_result_queue = queue.Queue()
+# obj_result_queue = queue.Queue()
+
+lane_result_queue = Queue()
+obj_result_queue = Queue()
 
 orig_frame = {}
 lane_mask = {}
@@ -63,8 +69,8 @@ class UdpSender():
         global original_latency_check
 
         # self.cap = cv2.VideoCapture(0)
-        self.cap = cv2.VideoCapture("/home/lee/dev_ws/projects/DL_project/final/server/sample_video.mp4")
-
+        self.cap = cv2.VideoCapture("/home/lee/dev_ws/projects/DL_project/final/server/lane.avi")
+        
         try:
             if not self.cap.isOpened():
                 print("[UDP] Webcam open failed")
@@ -178,64 +184,95 @@ class TcpLaneReceiver():
                 print(f"[TCP LANE RECEIVE ERROR] {e}")
                 import traceback
                 traceback.print_exc()
-                return None
+                # return None
+                continue
             
     def close(self):
         if self.tcp_lane is not None:
             self.tcp_lane.close()
             self.tcp_lane = None
 
-class LaneResultProcessor():
-    def __init__(self):
-        pass
-
-    def process_result(self):
+def lane_result_worker(lane_tcp_queue, lane_result_queue, lane_latency_check):
+    while True:
         try:
-            while True:
-                if not lane_tcp_queue.empty():
-                    lane_data = lane_tcp_queue.get_nowait()
-                    uuid = lane_data[0]
-                    # print("lane uuid : ", uuid) # debug
-                    pred_mask = lane_data[1]
-                    
-                    if pred_mask is None:
-                        continue
+            uuid, pred_mask = lane_tcp_queue.get()
+            if pred_mask is None:
+                continue
 
-                    h, w = pred_mask.shape
+            h, w = pred_mask.shape
+            left_zone = pred_mask[int(h * 0.5):, int(w * 0.2):int(w * 0.4)]
+            right_zone = pred_mask[int(h * 0.5):, int(w * 0.6):int(w * 0.8)]
 
-                    left_zone = pred_mask[int(h * 0.5):, int(w * 0.2):int(w * 0.4)]
-                    right_zone = pred_mask[int(h * 0.5):, int(w * 0.6):int(w * 0.8)]
+            can_change_left = np.count_nonzero(left_zone == 2) > 40
+            can_change_right = np.count_nonzero(right_zone == 2) > 40
+            stop_line = np.count_nonzero(pred_mask == 4) > 50
+            crosswalk = np.count_nonzero(pred_mask == 5) > 50
 
-                    can_change_left = np.count_nonzero(left_zone == 2) > 40
-                    can_change_right = np.count_nonzero(right_zone == 2) > 40
+            msg = [0, 0, 0, 0, 0]
+            if can_change_left: msg[0] = 1
+            if can_change_right: msg[1] = 1
+            if not (can_change_left or can_change_right): msg[2] = 1
+            if stop_line: msg[3] = 1
+            if crosswalk: msg[4] = 1
 
-                    stop_line = np.count_nonzero(pred_mask == 4) > 50
-                    crosswalk = np.count_nonzero(pred_mask == 5) > 50
-
-                    # print(pred_mask) # debug
-
-                    msg = [0, 0, 0, 0, 0]
-                    if can_change_left:
-                        msg[0] = 1
-                    if can_change_right:
-                        msg[1] = 1
-                    if not (can_change_left or can_change_right):
-                        msg[2] = 1
-                    if stop_line:
-                        msg[3] = 1
-                    if crosswalk:
-                        msg[4] = 1
-
-                    lane_result_queue.put((uuid, pred_mask, msg))
-
-                    # latency_check
-                    lane_latency_check[uuid] = {"lane":time.time()}
-                    # print("lane2 latency") # debug
-                    # return uuid, pred_mask
+            lane_result_queue.put((uuid, pred_mask, msg))
+            lane_latency_check[uuid] = {"lane": time.time()}
 
         except Exception as e:
             print(f"[LANE RESULT PROCESS ERROR] {e}")
-            return None
+            continue
+
+# class LaneResultProcessor():
+#     def __init__(self):
+#         pass
+
+#     def process_result(self):
+#         try:
+#             while True:
+#                 if not lane_tcp_queue.empty():
+#                     lane_data = lane_tcp_queue.get_nowait()
+#                     uuid = lane_data[0]
+#                     # print("lane uuid : ", uuid) # debug
+#                     pred_mask = lane_data[1]
+                    
+#                     if pred_mask is None:
+#                         continue
+
+#                     h, w = pred_mask.shape
+
+#                     left_zone = pred_mask[int(h * 0.5):, int(w * 0.2):int(w * 0.4)]
+#                     right_zone = pred_mask[int(h * 0.5):, int(w * 0.6):int(w * 0.8)]
+
+#                     can_change_left = np.count_nonzero(left_zone == 2) > 40
+#                     can_change_right = np.count_nonzero(right_zone == 2) > 40
+
+#                     stop_line = np.count_nonzero(pred_mask == 4) > 50
+#                     crosswalk = np.count_nonzero(pred_mask == 5) > 50
+
+#                     # print(pred_mask) # debug
+
+#                     msg = [0, 0, 0, 0, 0]
+#                     if can_change_left:
+#                         msg[0] = 1
+#                     if can_change_right:
+#                         msg[1] = 1
+#                     if not (can_change_left or can_change_right):
+#                         msg[2] = 1
+#                     if stop_line:
+#                         msg[3] = 1
+#                     if crosswalk:
+#                         msg[4] = 1
+
+#                     lane_result_queue.put((uuid, pred_mask, msg))
+
+#                     # latency_check
+#                     lane_latency_check[uuid] = {"lane":time.time()}
+#                     # print("lane2 latency") # debug
+#                     # return uuid, pred_mask
+
+#         except Exception as e:
+#             print(f"[LANE RESULT PROCESS ERROR] {e}")
+#             return None
 
 
 class TcpObjReceiver():
@@ -278,65 +315,93 @@ class TcpObjReceiver():
             
             except Exception as e:
                 print(f"[TCP OBJ RECEIVE ERROR] {e}")
-                return None
+                # return None
+                continue
             
     def close(self):
         if self.tcp_obj is not None:
             self.tcp_obj.close()
             self.tcp_obj = None
 
-class ObjectResultProcessor():
-    def __init__(self):
-        pass
-
-    def process_result(self):
+def obj_result_worker(obj_tcp_queue, obj_result_queue, obj_latency_check):
+    while True:
         try:
-            # 큐에서 최신 결과 추출
-            while True:
-                if not obj_tcp_queue.empty():
-                    # print("check")
-                    obj_tcp_data = obj_tcp_queue.get_nowait()
+            uuid, result = obj_tcp_queue.get()
+            mask = np.zeros((256, 512, 3), dtype=np.uint8)
 
-                    uuid = obj_tcp_data[0]
-                    # print("obj uuid : ", uuid) # debug
+            for obj_data in result:
+                if not isinstance(obj_data["bbox"], list):
+                    continue
+                x1, y1, x2, y2 = obj_data['bbox']
+                class_name = obj_data.get('class_name', 'unknown')
+                label = f"{class_name}"
+                color = (0, 255, 0)
 
-                    mask = np.zeros((256, 512, 3), dtype=np.uint8)
+                cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(mask, label, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-                    for obj_data in obj_tcp_data[1]:
-                        if not isinstance(obj_data["bbox"], list):
-                            print('obj is none')
-                            continue
-                        
-                        x1, y1, x2, y2 = obj_data['bbox']
-                        class_id = obj_data.get('class_id', -1)
-                        class_name = obj_data.get('class_name', 'unknown')
-
-                        label = f"{class_name}"
-                        color = (0, 255, 0)
-
-                        cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
-                        cv2.putText(mask, label, (x1, y1 - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-                    # print("obj: ",type(mask)) # debug
-                    obj_result_queue.put((uuid, mask, class_id))
-
-                    # latency_check
-                    obj_latency_check[uuid] = {"obj":time.time()}
-                    # print("obj result")
-                    # return mask 
+            obj_result_queue.put((uuid, mask, obj_data.get('class_id', -1)))
+            obj_latency_check[uuid] = {"obj": time.time()}
 
         except Exception as e:
             print(f"[OBJ RESULT PROCESS ERROR] {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+            continue
+
+
+# class ObjectResultProcessor():
+#     def __init__(self):
+#         pass
+
+#     def process_result(self):
+#         try:
+#             # 큐에서 최신 결과 추출
+#             while True:
+#                 if not obj_tcp_queue.empty():
+#                     # print("check")
+#                     obj_tcp_data = obj_tcp_queue.get_nowait()
+
+#                     uuid = obj_tcp_data[0]
+#                     # print("obj uuid : ", uuid) # debug
+
+#                     mask = np.zeros((256, 512, 3), dtype=np.uint8)
+
+#                     for obj_data in obj_tcp_data[1]:
+#                         if not isinstance(obj_data["bbox"], list):
+#                             print('obj is none')
+#                             continue
+                        
+#                         x1, y1, x2, y2 = obj_data['bbox']
+#                         class_id = obj_data.get('class_id', -1)
+#                         class_name = obj_data.get('class_name', 'unknown')
+
+#                         label = f"{class_name}"
+#                         color = (0, 255, 0)
+
+#                         cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
+#                         cv2.putText(mask, label, (x1, y1 - 10),
+#                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+#                     # print("obj: ",type(mask)) # debug
+#                     obj_result_queue.put((uuid, mask, class_id))
+
+#                     # latency_check
+#                     obj_latency_check[uuid] = {"obj":time.time()}
+#                     # print("obj result")
+#                     # return mask 
+
+#         except Exception as e:
+#             print(f"[OBJ RESULT PROCESS ERROR] {e}")
+#             import traceback
+#             traceback.print_exc()
+#             return None
 
 class WindowClass(QMainWindow, from_class):
     def __init__(self):
         super().__init__()
         self.setupUi(self)
         self.setWindowTitle("COVA II")
+        self.setStyleSheet(open("/home/lee/dev_ws/projects/DL_project/final/server/dark_style.css").read())
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_video_gui)
@@ -346,20 +411,30 @@ class WindowClass(QMainWindow, from_class):
         self.prev_obj_mask = None
 
         # 신호등과 정지선
+        self.distance = np.inf
+        self.red_detected = False
         self.state = True # Moving
         self.prev_state = True
 
         self.udp_sender = UdpSender()
         self.tcp_lane_receiver = TcpLaneReceiver()
         self.tcp_obj_receiver = TcpObjReceiver()
-        self.lane_result_processor = LaneResultProcessor()
-        self.obj_result_processor = ObjectResultProcessor()
+        # self.lane_result_processor = LaneResultProcessor()
+        # self.obj_result_processor = ObjectResultProcessor()
+
+        self.lane_process = Process(target=lane_result_worker,
+                                    args=(lane_tcp_queue, lane_result_queue, lane_latency_check))
+        self.obj_process = Process(target=obj_result_worker,
+                                args=(obj_tcp_queue, obj_result_queue, obj_latency_check))
+
+        self.lane_process.start()
+        self.obj_process.start()
 
         threading.Thread(target=self.udp_sender.send_frame, daemon=True).start()
         threading.Thread(target=self.tcp_lane_receiver.receive_data, daemon=True).start()
         threading.Thread(target=self.tcp_obj_receiver.receive_data, daemon=True).start()
-        threading.Thread(target=self.lane_result_processor.process_result, daemon=True).start()
-        threading.Thread(target=self.obj_result_processor.process_result, daemon=True).start()
+        # threading.Thread(target=self.lane_result_processor.process_result, daemon=True).start()
+        # threading.Thread(target=self.obj_result_processor.process_result, daemon=True).start()
 
         self.lane_color = {
             0: [0, 0, 0],         # 배경 - 검정
@@ -369,6 +444,7 @@ class WindowClass(QMainWindow, from_class):
             4: [0, 0, 255],       # 정지선 - 빨강
             5: [0, 255, 0],       # 횡단보도 - 초록
         }
+
 
     def colorize_mask_lane(self, mask):
         color_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
@@ -417,13 +493,13 @@ class WindowClass(QMainWindow, from_class):
                 lane = self.prev_lane_mask
 
                 frame = cv2.addWeighted(frame, 0.8, lane, 0.2, 0.0)
-                
-
-                
 
             if uuid in list(obj_mask.keys()):
-                # print("obj uuid : ", uuid)
+                self.red_detected = False
                 obj = obj_mask[uuid]
+                
+                if estimate_distance(obj, 0.05, 9) <= 3.0:
+                    self.red_detected = True
 
                 self.prev_obj_mask = obj
 
@@ -433,10 +509,6 @@ class WindowClass(QMainWindow, from_class):
                 obj = self.prev_obj_mask
 
                 frame = cv2.addWeighted(frame, 0.8, obj, 0.2, 0.0)
-
-
-                
-                
 
             # OpenCV BGR → Qt RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -448,12 +520,41 @@ class WindowClass(QMainWindow, from_class):
             pixmap = QPixmap.fromImage(img)
             self.label_video_lane.setPixmap(pixmap.scaled(
                 self.label_video_lane.width(), self.label_video_lane.height(), Qt.AspectRatioMode.KeepAspectRatio))
+            
+    # def alert_msg(self):
+
+
+    # def state_msg(self):
+    #     if self.red_detected:
+    #         if estimate_distance(obj_mask[uuid], 0.05, 4) <= 2.0:
+    #             self.label_msg_state.setText("Stop")
+    #             self.state = False
+
+
+    #     self.prev_state = self.state
+
+    # def object_msg(self):
+
+    # def lane_msg(self):
+
+    # def closeEvent(self, event):
+    #     self.udp_sender.close()
+    #     self.tcp_lane_receiver.close()
+    #     self.tcp_obj_receiver.close()
+    #     event.accept() # 창 닫기 허용
 
     def closeEvent(self, event):
         self.udp_sender.close()
         self.tcp_lane_receiver.close()
         self.tcp_obj_receiver.close()
-        event.accept() # 창 닫기 허용
+
+        self.lane_process.terminate()
+        self.obj_process.terminate()
+        self.lane_process.join()
+        self.obj_process.join()
+
+        event.accept()
+
 
 # Main
 if __name__ == "__main__":
