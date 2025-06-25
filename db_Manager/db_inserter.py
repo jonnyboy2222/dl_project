@@ -1,0 +1,153 @@
+import json
+
+class ObjectTypeInserter:
+    def __init__(self, db_connector):
+        self.db_connector = db_connector
+
+    def insert_object_type(self, name: str) -> int:
+        conn, cur = self.db_connector.get_connection()
+        try:
+            # 이미 있는지 확인
+            cur.execute(
+                """
+                SELECT id FROM ObjectType WHERE name = %s
+                """, (name,)
+                )
+            result = cur.fetchone()   # 위의 실행 결과의 row 반환 ex) {'id' : 3} 또는 None
+            if result:
+                return result['id'] # id 값 반환
+            else:
+                # 없으면 새로 추가
+                cur.execute(
+                    """
+                    INSERT INTO ObjectType (name) VALUES (%s)
+                    """, (name,)
+                    )
+                return cur.lastrowid # 방금 삽입된 행의 id 값을 반환
+        except Exception as e:
+            print(f"[DB ERROR] {e}")
+            raise
+        finally:
+            cur.close()
+            conn.close()
+
+
+class DriveSessionInserter:
+    def __init__(self, db_connector):
+        self.db_connector = db_connector
+
+    def insert_drive_session(self, start_time, end_time, total_distance, result_summary):
+        conn, cur = self.db_connector.get_connection()
+
+        try:
+            cur.execute(
+                """
+                INSERT INTO DriveSession (start_time, end_time, total_distance, result_summary)
+                VALUES (%s, %s, %s, %s)
+                """, (start_time, end_time, total_distance, result_summary)
+            )
+            return cur.lastrowid
+        except Exception as e:
+            print(f"[DB ERROR] {e}")
+            raise
+        finally:
+            cur.close()
+            conn.close()
+
+
+class ActionTypeInserter:
+    def __init__(self, db_connector):
+        self.db_connector = db_connector
+
+    def insert_action_type(self, name: str) -> int:
+        conn, cur = self.db_connector.get_connection()
+        try:
+            # 같은 name이 이미 있는지 조회
+            cur.execute(
+                """
+                SELECT id FROM ActionType WHERE name = %s
+                """, (name,)
+                )
+            result = cur.fetchone()
+            if result:
+                return result['id']
+            else:
+                # 없으면 새로 INSERT
+                cur.execute(
+                    """
+                    INSERT INTO ActionType (name) VALUES (%s)
+                    """, (name,)
+                    )
+                return cur.lastrowid
+        except Exception as e:
+            print(f"[DB ERROR] {e}")
+            raise
+        finally:
+            cur.close()
+            conn.close()
+
+
+class DetectedObjectInserter:
+    def __init__(self, db_connector):
+        self.db_connector = db_connector
+
+    def insert_detected_object(self,
+                                session_id: int,
+                                object_type_id: int,
+                                detected_time,   # datetime 객체
+                                confidence: float,
+                                bbox: dict,
+                                position: dict):
+        conn, cur = self.db_connector.get_connection()
+        try:
+            cur.execute(
+                """
+                INSERT INTO DetectedObject (session_id, object_type_id, detected_time, confidence, bbox, position)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """, (
+                session_id,
+                object_type_id,
+                detected_time,
+                confidence,
+                json.dumps(bbox),     # dict → JSON 문자열
+                json.dumps(position)  # dict → JSON 문자열
+            ))
+            return cur.lastrowid
+        except Exception as e:
+            print(f"[DB ERROR] {e}")
+            raise
+        finally:
+            cur.close()
+            conn.close()
+
+
+class ActionLogInserter:
+    def __init__(self, db_connector):
+        self.db_connector = db_connector
+
+    def insert_action_log(self,
+                          object_id: int,
+                          action_type_id: int,
+                          performed_time,  # datetime 객체
+                          delay: float,
+                          result: str):
+        conn, cur = self.db_connector.get_connection()
+        try:
+            cur.execute(
+                """
+                INSERT INTO ActionLog (object_id, action_type_id, performed_time, delay, result)
+                VALUES (%s, %s, %s, %s, %s)
+                """, (
+                object_id,
+                action_type_id,
+                performed_time,
+                delay,
+                result
+            ))
+            return cur.lastrowid
+        except Exception as e:
+            print(f"[DB ERROR] {e}")
+            raise
+        finally:
+            cur.close()
+            conn.close()
