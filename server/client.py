@@ -370,8 +370,24 @@ class VideoUpdateThread(QThread):
     
     def update_msg(self, msg, cls_id):
         # 차선변경 가능 여부
-        if msg[0] == 1 and cls_id == :
-            label_
+        if msg[0] == 1 and not cls_id == 0:
+            self.label_msg_lane.setText("차선 변경 가능")
+        else:
+            self.label_msg_lane.setText("차선 변경 불가능")
+
+        # 정지선
+        if msg[2] == 1:
+            self.label_msg_stop.setText("정지선")
+        else:
+            self.label_msg_stop.setText("")
+
+        # 횡단보도
+        if msg[3] == 1:
+            self.label_msg_crosswalk.setText("횡단보도")
+        else:
+            self.label_msg_crosswalk.setText("")
+
+
 
     def run(self):
         while self.running:
