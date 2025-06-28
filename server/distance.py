@@ -1,5 +1,7 @@
 import numpy as np
-def estimate_stopline_distance(mask: np.ndarray, scale_factor: float) -> float | None:
+
+# Lane Distance
+def estimate_lane_distance(mask: np.ndarray, scale_factor: float) -> float | None:
     """
     정지선 클래스가 있는 mask에서 거리 추정 (픽셀 → 실제 거리(m))
     Args:
@@ -19,3 +21,52 @@ def estimate_stopline_distance(mask: np.ndarray, scale_factor: float) -> float |
     pixel_distance = frame_height - y_max
     real_distance = pixel_distance * scale_factor
     return real_distance
+
+
+# Object Distance
+# 2. 클래스별 색상 및 실제 크기 정의
+CLASS_COLORS = {
+    "car": (0, 255, 0),
+    "child_protection": (255, 255, 0),
+    "construction": (255, 0, 0),
+    "person": (0, 0, 255),
+    "speed_limit_30": (0, 165, 255),
+    "speed_limit_50": (128, 0, 128),
+    "stop_sign": (0, 255, 255),
+    "veh_go": (255, 0, 255),
+    "veh_goLeft": (102, 0, 204),
+    "veh_stop": (0, 128, 255),
+    "veh_warning": (255, 128, 0),
+}
+REAL_DIMENSIONS = {
+    "car": {"w": 1.8, "h": 1.5},
+    "child_protection": {"w": 0.6, "h": 0.6},
+    "construction": {"w": 0.3, "h": 0.7},
+    "person": {"w": 0.5, "h": 1.7},
+    "speed_limit_30": {"w": 0.6, "h": 0.6},
+    "speed_limit_50": {"w": 0.6, "h": 0.6},
+    "stop_sign": {"w": 0.7, "h": 0.7},
+    "veh_go": {"w": 0.5, "h": 0.5},
+    "veh_goLeft": {"w": 0.5, "h": 0.5},
+    "veh_stop": {"w": 0.5, "h": 0.5},
+    "veh_warning": {"w": 0.5, "h": 0.5},
+}
+FOCAL_LENGTH = 1250  # 조정 가능
+
+def estimate_obj_distance(obj_class, box):
+    x1, y1, x2, y2 = box
+    box_w = abs(x2 - x1)
+    box_h = abs(y2 - y1)
+    if obj_class not in REAL_DIMENSIONS:
+        return None
+    real = REAL_DIMENSIONS[obj_class]
+    use_width = obj_class in {
+        "car", "child_protection", "speed_limit_30",
+        "speed_limit_50", "stop_sign", "veh_go",
+        "veh_goLeft", "veh_stop", "veh_warning"
+    }
+    if use_width and box_w > 0:
+        return (real["w"] * FOCAL_LENGTH) / box_w
+    elif box_h > 0:
+        return (real["h"] * FOCAL_LENGTH) / box_h
+    return None

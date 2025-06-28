@@ -8,7 +8,7 @@ from PyQt6 import uic
 
 from threading import Lock
 
-from distance import estimate_distance
+from distance import *
 
 import pandas as pd
 
@@ -265,12 +265,13 @@ def obj_result_worker(obj_tcp_queue, obj_result_queue, obj_latency_check):
                     color = (0, 255, 0)
 
                     class_id = obj_data.get('class_id', -1)
+                    obj_distance = estimate_obj_distance(class_id, (x1,y1,x2,y2))
 
                     cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
                     cv2.putText(mask, label, (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-                obj_result_queue.put((uuid, mask, class_id))
+                obj_result_queue.put((uuid, mask, class_id, obj_distance))
                 # print("obj result : ", obj_result_queue.qsize())
                 
                 obj_latency_check[uuid] = {"obj": time.time()}
@@ -294,12 +295,6 @@ class WindowClass(QMainWindow, from_class):
         self.video_thread = VideoUpdateThread(self.label_video_lane.width(), self.label_video_lane.height())
         self.video_thread.frame_ready.connect(self.update_frame)
         self.video_thread.start()
-
-        # 신호등과 정지선
-        # self.distance = np.inf
-        # self.red_detected = False
-        # self.state = True # Moving
-        # self.prev_state = True
 
         self.udp_sender = UdpSender()
 
@@ -362,6 +357,9 @@ class VideoUpdateThread(QThread):
             5: [255, 0, 255],     # 횡단보도 - 마젠타
         }
 
+        self.lane_dist = None
+        self.obj_dist = None
+
     def colorize_mask_lane(self, mask):
         color_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
         for k, color in self.lane_color.items():
@@ -370,26 +368,64 @@ class VideoUpdateThread(QThread):
     
     def update_msg(self, msg, cls_id):
         # 차선변경 가능 여부
-        if msg[0] == 1 and not cls_id == 0:
+        if msg[0] == 1 and cls_id != 0:
             self.label_msg_lane.setText("좌측 차선 변경 가능")
-        elif msg[1] == 1 and not cls_id == 0:
+        elif msg[1] == 1 and cls_id != 0:
             self.label_msg_lane.setText("우측 차선 변경 가능")
         elif cls_id in (10, 9, 8, 7):
             self.label_msg_lane.setText("차선 변경 불가능")
         else:
             self.label_msg_lane.setText("차선 변경 불가능")
 
-        # 정지선
+        # 정지선 인식 및 차량 정지 조건
         if msg[2] == 1:
             self.label_msg_stop.setText("정지선")
+            distance = estimate_lane_distance(self.prev_lane_mask, 0.05)
+            if distance is not None and distance < 2.0 and cls_id == 9:  # vehicle_stop
+                self.label_msg_state.setText("정지")
+            else:
+                self.label_msg_state.setText("주행 중")
 
-        # 횡단보도
+        # 횡단보도 + 사람 인식 시 주의 메시지
         if msg[3] == 1:
             self.label_msg_crosswalk.setText("횡단보도")
+            if cls_id == 3:  # 사람
+                self.label_msg_alert.setText("횡단보도에 사람이 있습니다. 주의하세요.")
+                distance = estimate_obj_distance(cls_id, self.prev_bbox)
+                if distance is not None and distance < 3.0:
+                    self.label_msg_state.setText("정지")
+                else:
+                    self.label_msg_state.setText("주행 중")
+            else:
+                self.label_msg_state.setText("주행 중")
 
-        
+        # 객체 인식별 반응
+        if cls_id == 0:  # 자동차
+            self.label_msg_obj.setText("자동차 인식됨")
+            distance = estimate_obj_distance(cls_id, self.prev_bbox)
+            if distance is not None:
+                self.label_msg_obj.setText(f"자동차 인식됨 (거리: {distance:.2f}m)")
 
+        elif cls_id == 1:  # 어린이 보호구역
+            self.label_msg_alert.setText("어린이 보호구역 - 주의")
+            self.label_msg_obj.setText("어린이 보호구역")
 
+        elif cls_id == 2:  # 공사장
+            self.label_msg_alert.setText("공사장 근처 - 주의")
+            self.label_msg_obj.setText("공사장")
+
+        elif cls_id == 4:  # 제한속도 30
+            self.label_msg_alert.setText("30km/h 이하로 주행")
+            self.label_msg_obj.setText("30km/h 속도제한 구간")
+
+        elif cls_id == 5:  # 제한속도 50
+            self.label_msg_alert.setText("50km/h 이하로 주행")
+            self.label_msg_obj.setText("50km/h 속도제한 구간")
+
+        elif cls_id == 6:  # 정지표지
+            self.label_msg_obj.setText("정지 표지판 인식됨")
+            self.label_msg_state.setText("정지")
+            QTimer.singleShot(5000, lambda: self.label_msg_state.setText("주행 중"))  # 5초 후 주행 중으로 변경
 
     def run(self):
         while self.running:
