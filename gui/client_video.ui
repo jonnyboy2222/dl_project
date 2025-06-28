@@ -91,7 +91,7 @@
      </widget>
     </item>
     <item>
-     <widget class="QLabel" name="label_msg_alert_2">
+     <widget class="QLabel" name="label_msg_state">
       <property name="font">
        <font>
         <pointsize>15</pointsize>

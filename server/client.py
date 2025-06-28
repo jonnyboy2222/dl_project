@@ -19,11 +19,13 @@ from typing import Any
 
 
 # 서버 IP 및 포트 정보
-LANE_SERVER_IP = "192.168.0.252"
+#LANE_SERVER_IP = "192.168.0.252"
+LANE_SERVER_IP = "172.30.1.43"
 TCP_LANE_PORT = 12345
 UDP_LANE_PORT = 54321
 
-OBJ_SERVER_IP = "192.168.0.55"
+#OBJ_SERVER_IP = "192.168.0.55"
+OBJ_SERVER_IP = "172.30.1.86"
 TCP_OBJ_PORT = 12346
 UDP_OBJ_PORT = 54322
 
@@ -40,7 +42,7 @@ original_latency_check = {}
 lane_latency_check = {}
 obj_latency_check = {}
 
-from_class = uic.loadUiType("/home/lee/dev_ws/projects/DL_project/final/gui/client_video.ui")[0]
+from_class = uic.loadUiType("/home/KTH/dl_project/gui/client_video.ui")[0]
 
 class UdpSender():
     def __init__(self):
@@ -57,7 +59,7 @@ class UdpSender():
         global original_latency_check
 
         # self.cap = cv2.VideoCapture(0)
-        self.cap = cv2.VideoCapture("/home/lee/dev_ws/projects/DL_project/final/server/lane_2.avi")
+        self.cap = cv2.VideoCapture("/home/KTH/Downloads/WIN_20250626_07_20_01_Pro.mp4")
         
         try:
             if not self.cap.isOpened():
@@ -287,15 +289,24 @@ class WindowClass(QMainWindow, from_class):
         super().__init__()
         self.setupUi(self)
         self.setWindowTitle("COVA II")
-        self.setStyleSheet(open("/home/lee/dev_ws/projects/DL_project/final/server/dark_style.css").read())
+        #self.setStyleSheet(open("/home/lee/dev_ws/projects/DL_project/final/server/dark_style.css").read())
 
         self.prev_lane_mask = None
         self.prev_obj_mask = None
 
         self.video_thread = VideoUpdateThread(self.label_video_lane.width(), self.label_video_lane.height())
-        self.video_thread.frame_ready.connect(self.update_frame)
+        # 예: MainWindow 클래스에서 VideoUpdateThread 객체를 생성 후 연결
+        
 
+        # Signal 연결
+        self.video_thread.lane_message.connect(self.label_msg_lane.setText)
+        self.video_thread.alert_message.connect(self.label_msg_alert.setText)
+        self.video_thread.obj_message.connect(self.label_msg_obj.setText)
+        self.video_thread.state_message.connect(self.label_msg_state.setText)
+
+        self.video_thread.frame_ready.connect(self.update_frame)
         self.video_thread.start()
+
 
         self.udp_sender = UdpSender()
 
@@ -338,132 +349,139 @@ class WindowClass(QMainWindow, from_class):
         event.accept()
 
 class VideoUpdateThread(QThread):
-    frame_ready = pyqtSignal(QPixmap)  # signal to GUI
+    frame_ready = pyqtSignal(QPixmap)
+
+    # 추가된 Signals (UI 업데이트용)
+    lane_message = pyqtSignal(str)
+    alert_message = pyqtSignal(str)
+    obj_message = pyqtSignal(str)
+    state_message = pyqtSignal(str)
 
     def __init__(self, label_width, label_height, parent=None):
         super().__init__(parent)
-        # print("video update thread")
         self.label_width = label_width
         self.label_height = label_height
         self.running = True
+        self.lane_msg = None
+        self.obj_class = None
 
-        self.MAX_WAIT_TIME = 0.3  # 최대 대기 시간 (초)
+        self.MAX_WAIT_TIME = 0.3
 
         self.lane_color = {
-            0: [0, 0, 0],         # 배경 - 검정
-            1: [0, 0, 255],       # 흰색 실선 - 선명한 빨강
-            2: [0, 255, 255],     # 흰색 점선 - 시안 (cyan)
-            3: [0, 255, 0],       # 중앙선(노란 실선) - 선명한 초록
-            4: [255, 0, 0],       # 정지선 - 파랑
-            5: [255, 0, 255],     # 횡단보도 - 마젠타
+            0: [0, 0, 0],
+            1: [0, 0, 255],
+            2: [0, 255, 255],
+            3: [0, 255, 0],
+            4: [255, 0, 0],
+            5: [255, 0, 255],
         }
 
         self.lane_dist = None
         self.obj_dist = None
+        self.prev_lane_mask = None
+        self.prev_bbox = None
 
     def colorize_mask_lane(self, mask):
         color_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
         for k, color in self.lane_color.items():
             color_mask[mask == k] = color
         return color_mask
-    
-    def update_msg(self, msg, cls_id):
-        # 차선변경 가능 여부
-        if msg[0] == 1 and cls_id != 0:
-            self.label_msg_lane.setText("좌측 차선 변경 가능")
-        elif msg[1] == 1 and cls_id != 0:
-            self.label_msg_lane.setText("우측 차선 변경 가능")
-        elif cls_id in (10, 9, 8, 7):
-            self.label_msg_lane.setText("차선 변경 불가능")
-        else:
-            self.label_msg_lane.setText("차선 변경 불가능")
 
-        # 정지선 인식 및 차량 정지 조건
+    def update_msg(self, msg, cls_id):
+        if msg is None or cls_id is None:
+            return
+
+        # 차선변경 여부
+        if msg[0] == 1 and cls_id != 0:
+            self.lane_message.emit("좌측 차선 변경 가능")
+        elif msg[1] == 1 and cls_id != 0:
+            self.lane_message.emit("우측 차선 변경 가능")
+        elif cls_id in (10, 9, 8, 7):
+            self.lane_message.emit("차선 변경 불가능")
+        else:
+            self.lane_message.emit("차선 변경 불가능")
+
+        # 정지선
         if msg[2] == 1:
             self.lane_dist = estimate_lane_distance(self.prev_lane_mask, 0.05)
-            if self.lane_dist is not None and self.lane_dist < 2.0 and cls_id == 9:  # vehicle_stop
-                self.label_msg_state.setText("정지")
+            if self.lane_dist is not None and self.lane_dist < 2.0 and cls_id == 9:
+                self.state_message.emit("정지")
             else:
-                self.label_msg_state.setText("주행 중")
+                self.state_message.emit("주행 중")
 
-        # 횡단보도 + 사람 인식 시 주의 메시지
+        # 횡단보도 + 사람
         if msg[3] == 1:
-            if cls_id == 3:  # 사람
-                self.label_msg_alert.setText("횡단보도에 사람이 있습니다. 주의하세요.")
+            if cls_id == 3:
+                self.alert_message.emit("횡단보도에 사람이 있습니다. 주의하세요.")
                 self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
                 if self.obj_dist is not None and self.obj_dist < 3.0:
-                    self.label_msg_state.setText("정지")
+                    self.state_message.emit("정지")
                 else:
-                    self.label_msg_state.setText("주행 중")
+                    self.state_message.emit("주행 중")
             else:
-                self.label_msg_state.setText("주행 중")
+                self.state_message.emit("주행 중")
 
-        # 객체 인식별 반응
-        if cls_id == 0:  # 자동차
-            self.label_msg_obj.setText("자동차 인식됨")
+        # 객체별 분기
+        if cls_id == 0:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
             if self.obj_dist is not None:
-                self.label_msg_obj.setText(f"자동차 인식됨 (거리: {self.obj_dist:.2f}m)")
+                self.obj_message.emit(f"자동차 인식됨 (거리: {self.obj_dist:.2f}m)")
+            else:
+                self.obj_message.emit("자동차 인식됨")
 
-        elif cls_id == 1:  # 어린이 보호구역
-            self.label_msg_alert.setText("어린이 보호구역 - 주의")
-            self.label_msg_obj.setText("어린이 보호구역")
+        elif cls_id == 1:
+            self.alert_message.emit("어린이 보호구역 - 주의")
+            self.obj_message.emit("어린이 보호구역")
 
-        elif cls_id == 2:  # 공사장
-            self.label_msg_alert.setText("공사장 근처 - 주의")
-            self.label_msg_obj.setText("공사장")
+        elif cls_id == 2:
+            self.alert_message.emit("공사장 근처 - 주의")
+            self.obj_message.emit("공사장")
 
-        elif cls_id == 4:  # 제한속도 30
-            self.label_msg_alert.setText("30km/h 이하로 주행")
-            self.label_msg_obj.setText("30km/h 속도제한 구간")
+        elif cls_id == 4:
+            self.alert_message.emit("30km/h 이하로 주행")
+            self.obj_message.emit("30km/h 속도제한 구간")
 
-        elif cls_id == 5:  # 제한속도 50
-            self.label_msg_alert.setText("50km/h 이하로 주행")
-            self.label_msg_obj.setText("50km/h 속도제한 구간")
+        elif cls_id == 5:
+            self.alert_message.emit("50km/h 이하로 주행")
+            self.obj_message.emit("50km/h 속도제한 구간")
 
-        elif cls_id == 6:  # 정지표지
-            self.label_msg_obj.setText("정지 표지판 인식됨")
-            self.label_msg_state.setText("정지")
-            QTimer.singleShot(5000, lambda: self.label_msg_state.setText("주행 중"))  # 5초 후 주행 중으로 변경
+        elif cls_id == 6:
+            self.obj_message.emit("정지 표지판 인식됨")
+            self.state_message.emit("정지")
+            QTimer.singleShot(5000, lambda: self.state_message.emit("주행 중"))
 
     def run(self):
         while self.running:
             now = time.time()
 
-            # 1. 프레임 수신
+            # 프레임 수신
             if not udp_video_queue.empty():
                 udp_data = udp_video_queue.get_nowait()
                 uuid = udp_data[0]
                 frame = udp_data[1]
-                print("original", uuid)
                 orig_frame[uuid] = frame
                 frame_time[uuid] = now
 
-            # 2. 마스크 수신
             while not lane_result_queue.empty():
                 lane_data = lane_result_queue.get_nowait()
-
                 lane_uuid = lane_data[0]
                 lane_result = lane_data[1]
-                lane_msg = lane_data[2]
-
+                self.lane_msg = lane_data[2]
                 lane_mask[lane_uuid] = lane_result
-                print("lane :", lane_uuid)
 
             while not obj_result_queue.empty():
                 obj_data = obj_result_queue.get_nowait()
-
                 obj_uuid = obj_data[0]
                 obj_result = obj_data[1]
-                obj_class = obj_data[2]
-
+                self.obj_class = obj_data[2]
                 obj_mask[obj_uuid] = obj_result
-                print("obj :", obj_uuid)
 
-            self.update_msg(lane_msg, obj_class)
+            try:
+                self.update_msg(self.lane_msg, self.obj_class)
+            except Exception as e:
+                print("update_msg 예외:", e)
 
-            # 3. 처리 가능한 프레임 추출 (도착 순서 기준)
-            ready_uuids = sorted(orig_frame.keys())  # UUID 순서대로 처리
+            ready_uuids = sorted(orig_frame.keys())
             for uuid in ready_uuids:
                 frame_age = now - frame_time.get(uuid, now)
                 lane = lane_mask.get(uuid)
@@ -471,42 +489,35 @@ class VideoUpdateThread(QThread):
 
                 if lane is None or obj is None:
                     if frame_age < self.MAX_WAIT_TIME:
-                        continue  # 아직 기다릴 수 있음
+                        continue
                     else:
                         print(f"[WARN] {uuid}: 마스크 지연 - {frame_age:.2f}s → 부분 처리 진행")
 
-                # frame, mask 모두 처리 또는 timeout
                 frame = orig_frame.pop(uuid)
                 frame_time.pop(uuid, None)
                 lane = lane_mask.pop(uuid, None)
                 obj = obj_mask.pop(uuid, None)
 
-                # === Overlay 처리 ===
                 if lane is not None and len(lane.shape) == 2:
                     try:
                         lane = self.colorize_mask_lane(lane)
                         frame = cv2.addWeighted(frame, 0.7, lane, 0.3, 0.0)
                     except Exception:
-                        print("lane none")
                         pass
 
                 if obj is not None:
                     try:
                         frame = cv2.addWeighted(frame, 0.7, obj, 0.3, 0.0)
                     except Exception:
-                        print("obj none")
                         pass
 
-                # Qt 변환 및 emit
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                # rgb_frame = frame
                 h, w, ch = rgb_frame.shape
                 img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format.Format_RGB888)
                 pixmap = QPixmap.fromImage(img)
                 scaled = pixmap.scaled(self.label_width, self.label_height, Qt.AspectRatioMode.KeepAspectRatio)
                 self.frame_ready.emit(scaled)
 
-            # 4. 오래된 마스크 제거
             expire_threshold = 2.0
             for mask_dict in (lane_mask, obj_mask):
                 expired = [uuid for uuid in mask_dict if now - frame_time.get(uuid, now) > expire_threshold]
@@ -520,6 +531,7 @@ class VideoUpdateThread(QThread):
         self.running = False
         self.quit()
         self.wait()
+
 
 # Main
 if __name__ == "__main__":
