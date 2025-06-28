@@ -391,7 +391,7 @@ class VideoUpdateThread(QThread):
         if msg is None or cls_id is None:
             return
 
-        # 차선변경 여부
+        # ✅ 1. 차선변경 여부 (수정하지 않음)
         if msg[0] == 1 and cls_id != 0:
             self.lane_message.emit("좌측 차선 변경 가능")
         elif msg[1] == 1 and cls_id != 0:
@@ -401,54 +401,63 @@ class VideoUpdateThread(QThread):
         else:
             self.lane_message.emit("차선 변경 불가능")
 
-        # 정지선
+        # ✅ 2. 정지선 (거리 4.0m 이내만 처리)
         if msg[2] == 1:
             self.lane_dist = estimate_lane_distance(self.prev_lane_mask, 0.05)
-            if self.lane_dist is not None and self.lane_dist < 2.0 and cls_id == 9:
+            if self.lane_dist is not None and self.lane_dist < 4.0 and cls_id == 9:
                 self.state_message.emit("정지")
-            else:
+            elif self.lane_dist is not None and self.lane_dist < 4.0:
                 self.state_message.emit("주행 중")
 
-        # 횡단보도 + 사람
+        # ✅ 3. 횡단보도 + 사람 (거리 4.0m 이내만 처리)
         if msg[3] == 1:
             if cls_id == 3:
-                self.alert_message.emit("횡단보도에 사람이 있습니다. 주의하세요.")
                 self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
-                if self.obj_dist is not None and self.obj_dist < 3.0:
-                    self.state_message.emit("정지")
-                else:
-                    self.state_message.emit("주행 중")
-            else:
+                if self.obj_dist is not None and self.obj_dist < 4.0:
+                    self.alert_message.emit("횡단보도에 사람이 있습니다. 주의하세요.")
+                    if self.obj_dist < 3.0:
+                        self.state_message.emit("정지")
+                    else:
+                        self.state_message.emit("주행 중")
+            elif cls_id != 3:
                 self.state_message.emit("주행 중")
 
-        # 객체별 분기
+        # ✅ 4. 객체별 (거리 4.0m 이내만 메시지 업데이트)
         if cls_id == 0:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
-            if self.obj_dist is not None:
+            if self.obj_dist is not None and self.obj_dist < 4.0:
                 self.obj_message.emit(f"자동차 인식됨 (거리: {self.obj_dist:.2f}m)")
-            else:
-                self.obj_message.emit("자동차 인식됨")
 
         elif cls_id == 1:
-            self.alert_message.emit("어린이 보호구역 - 주의")
-            self.obj_message.emit("어린이 보호구역")
+            self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
+            if self.obj_dist is not None and self.obj_dist < 4.0:
+                self.alert_message.emit("어린이 보호구역 - 주의")
+                self.obj_message.emit("어린이 보호구역")
 
         elif cls_id == 2:
-            self.alert_message.emit("공사장 근처 - 주의")
-            self.obj_message.emit("공사장")
+            self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
+            if self.obj_dist is not None and self.obj_dist < 4.0:
+                self.alert_message.emit("공사장 근처 - 주의")
+                self.obj_message.emit("공사장")
 
         elif cls_id == 4:
-            self.alert_message.emit("30km/h 이하로 주행")
-            self.obj_message.emit("30km/h 속도제한 구간")
+            self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
+            if self.obj_dist is not None and self.obj_dist < 4.0:
+                self.alert_message.emit("30km/h 이하로 주행")
+                self.obj_message.emit("30km/h 속도제한 구간")
 
         elif cls_id == 5:
-            self.alert_message.emit("50km/h 이하로 주행")
-            self.obj_message.emit("50km/h 속도제한 구간")
+            self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
+            if self.obj_dist is not None and self.obj_dist < 4.0:
+                self.alert_message.emit("50km/h 이하로 주행")
+                self.obj_message.emit("50km/h 속도제한 구간")
 
         elif cls_id == 6:
-            self.obj_message.emit("정지 표지판 인식됨")
-            self.state_message.emit("정지")
-            QTimer.singleShot(5000, lambda: self.state_message.emit("주행 중"))
+            self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
+            if self.obj_dist is not None and self.obj_dist < 4.0:
+                self.obj_message.emit("정지 표지판 인식됨")
+                self.state_message.emit("정지")
+                QTimer.singleShot(5000, lambda: self.state_message.emit("주행 중"))
 
     def run(self):
         while self.running:
