@@ -10,7 +10,7 @@ class ObjectTypeInserter:
             # 이미 있는지 확인
             cur.execute(
                 """
-                SELECT id FROM ObjectType WHERE name = %s
+                SELECT id FROM object_type WHERE name = %s
                 """, (name,)
                 )
             result = cur.fetchone()   # 위의 실행 결과의 row 반환 ex) {'id' : 3} 또는 None
@@ -20,7 +20,7 @@ class ObjectTypeInserter:
                 # 없으면 새로 추가
                 cur.execute(
                     """
-                    INSERT INTO ObjectType (name) VALUES (%s)
+                    INSERT INTO object_type (name) VALUES (%s)
                     """, (name,)
                     )
                 return cur.lastrowid # 방금 삽입된 행의 id 값을 반환
@@ -42,7 +42,7 @@ class DriveSessionInserter:
         try:
             cur.execute(
                 """
-                INSERT INTO DriveSession (start_time, end_time, total_distance, result_summary)
+                INSERT INTO drive_session (start_time, end_time, total_distance, result_summary)
                 VALUES (%s, %s, %s, %s)
                 """, (start_time, end_time, total_distance, result_summary)
             )
@@ -65,7 +65,7 @@ class ActionTypeInserter:
             # 같은 name이 이미 있는지 조회
             cur.execute(
                 """
-                SELECT id FROM ActionType WHERE name = %s
+                SELECT id FROM action_type WHERE name = %s
                 """, (name,)
                 )
             result = cur.fetchone()
@@ -75,7 +75,7 @@ class ActionTypeInserter:
                 # 없으면 새로 INSERT
                 cur.execute(
                     """
-                    INSERT INTO ActionType (name) VALUES (%s)
+                    INSERT INTO action_type (name) VALUES (%s)
                     """, (name,)
                     )
                 return cur.lastrowid
@@ -102,7 +102,7 @@ class DetectedObjectInserter:
         try:
             cur.execute(
                 """
-                INSERT INTO DetectedObject (session_id, object_type_id, detected_time, confidence, bbox, position)
+                INSERT INTO detected_object (session_id, object_type_id, detected_time, confidence, bbox, position)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 """, (
                 session_id,
@@ -135,7 +135,7 @@ class ActionLogInserter:
         try:
             cur.execute(
                 """
-                INSERT INTO ActionLog (object_id, action_type_id, performed_time, delay, result)
+                INSERT INTO action_log (object_id, action_type_id, performed_time, delay, result)
                 VALUES (%s, %s, %s, %s, %s)
                 """, (
                 object_id,
