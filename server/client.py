@@ -294,6 +294,7 @@ class WindowClass(QMainWindow, from_class):
 
         self.video_thread = VideoUpdateThread(self.label_video_lane.width(), self.label_video_lane.height())
         self.video_thread.frame_ready.connect(self.update_frame)
+
         self.video_thread.start()
 
         self.udp_sender = UdpSender()
@@ -379,20 +380,18 @@ class VideoUpdateThread(QThread):
 
         # 정지선 인식 및 차량 정지 조건
         if msg[2] == 1:
-            self.label_msg_stop.setText("정지선")
-            distance = estimate_lane_distance(self.prev_lane_mask, 0.05)
-            if distance is not None and distance < 2.0 and cls_id == 9:  # vehicle_stop
+            self.lane_dist = estimate_lane_distance(self.prev_lane_mask, 0.05)
+            if self.lane_dist is not None and self.lane_dist < 2.0 and cls_id == 9:  # vehicle_stop
                 self.label_msg_state.setText("정지")
             else:
                 self.label_msg_state.setText("주행 중")
 
         # 횡단보도 + 사람 인식 시 주의 메시지
         if msg[3] == 1:
-            self.label_msg_crosswalk.setText("횡단보도")
             if cls_id == 3:  # 사람
                 self.label_msg_alert.setText("횡단보도에 사람이 있습니다. 주의하세요.")
-                distance = estimate_obj_distance(cls_id, self.prev_bbox)
-                if distance is not None and distance < 3.0:
+                self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
+                if self.obj_dist is not None and self.obj_dist < 3.0:
                     self.label_msg_state.setText("정지")
                 else:
                     self.label_msg_state.setText("주행 중")
@@ -402,9 +401,9 @@ class VideoUpdateThread(QThread):
         # 객체 인식별 반응
         if cls_id == 0:  # 자동차
             self.label_msg_obj.setText("자동차 인식됨")
-            distance = estimate_obj_distance(cls_id, self.prev_bbox)
-            if distance is not None:
-                self.label_msg_obj.setText(f"자동차 인식됨 (거리: {distance:.2f}m)")
+            self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
+            if self.obj_dist is not None:
+                self.label_msg_obj.setText(f"자동차 인식됨 (거리: {self.obj_dist:.2f}m)")
 
         elif cls_id == 1:  # 어린이 보호구역
             self.label_msg_alert.setText("어린이 보호구역 - 주의")
@@ -461,6 +460,8 @@ class VideoUpdateThread(QThread):
                 obj_mask[obj_uuid] = obj_result
                 print("obj :", obj_uuid)
 
+            self.update_msg(lane_msg, obj_class)
+
             # 3. 처리 가능한 프레임 추출 (도착 순서 기준)
             ready_uuids = sorted(orig_frame.keys())  # UUID 순서대로 처리
             for uuid in ready_uuids:
@@ -511,6 +512,9 @@ class VideoUpdateThread(QThread):
                 expired = [uuid for uuid in mask_dict if now - frame_time.get(uuid, now) > expire_threshold]
                 for uuid in expired:
                     mask_dict.pop(uuid, None)
+
+            self.lane_dist = None
+            self.obj_dist = None
 
     def stop(self):
         self.running = False
