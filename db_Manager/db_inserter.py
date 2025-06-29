@@ -97,7 +97,7 @@ class DetectedObjectInserter:
                                 detected_time,   # datetime 객체
                                 confidence: float,
                                 bbox: dict,
-                                position: dict):
+                                position: float):
         conn, cur = self.db_connector.get_connection()
         try:
             cur.execute(

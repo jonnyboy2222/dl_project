@@ -16,6 +16,10 @@ from multiprocessing import Process, Queue, Manager
 
 from typing import Any
 
+from db_Manager.db_connector import DBConnector
+from db_Manager.db_inserter import *
+from datetime import datetime
+
 
 
 # 서버 IP 및 포트 정보
@@ -262,6 +266,11 @@ def obj_result_worker(obj_tcp_queue, obj_result_queue, obj_latency_check):
                         continue
 
                     x1, y1, x2, y2 = obj_data['bbox']
+                    bbox_raw = str(x1) + " " + str(y1) + " " + str(x2) + " " + str(y2)
+                    bbox = {
+                        bbox:bbox_raw
+                    }
+                    confidence = float(obj_data['confidence'])
                     class_name = obj_data.get('class_name', 'unknown')
                     label = f"{class_name}"
                     color = (0, 255, 0)
@@ -273,7 +282,7 @@ def obj_result_worker(obj_tcp_queue, obj_result_queue, obj_latency_check):
                     cv2.putText(mask, label, (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-                obj_result_queue.put((uuid, mask, class_id, obj_distance))
+                obj_result_queue.put((uuid, mask, class_id, obj_distance, confidence, bbox))
                 # print("obj result : ", obj_result_queue.qsize())
                 
                 obj_latency_check[uuid] = {"obj": time.time()}
@@ -381,39 +390,86 @@ class VideoUpdateThread(QThread):
         self.prev_lane_mask = None
         self.prev_bbox = None
 
+        # DB 삽입을 위한 데이터 수집
+        self.session_id = None
+        self.session_start_time = datetime.now()
+        self.detected_objects = []
+        self.action_logs = []
+        self.total_distance = 0.0
+
+        # DB 연결 및 inserter 초기화
+        self.db_connector = DBConnector()
+        #self.object_type_inserter = ObjectTypeInserter(self.db_connector)
+        #self.action_type_inserter = ActionTypeInserter(self.db_connector)
+        self.detected_object_inserter = DetectedObjectInserter(self.db_connector)
+        self.action_log_inserter = ActionLogInserter(self.db_connector)
+        self.drive_session_inserter = DriveSessionInserter(self.db_connector)
+
+        try:
+            self.session_id = self.drive_session_inserter.insert_drive_session(
+                start_time=self.session_start_time,
+                end_time=None,
+                total_distance=0.0,
+                result_summary="{}"
+            )
+            print(f"Drive session started with ID: {self.session_id}")
+        except Exception as e:
+            print(f"Failed to start drive session: {e}")
+
     def colorize_mask_lane(self, mask):
         color_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
         for k, color in self.lane_color.items():
             color_mask[mask == k] = color
         return color_mask
 
-    def update_msg(self, msg, cls_id):
+    def update_msg(self, msg, cls_id, obj_time):
         if msg is None or cls_id is None:
             return
 
         # ✅ 1. 차선변경 여부 (수정하지 않음)
         if msg[0] == 1 and cls_id != 0:
             self.lane_message.emit("좌측 차선 변경 가능")
+            self.action_log_inserter.insert_action_log(
+                cls_id + 1,
+                3,
+                datetime.now(),
+                datetime.now() - obj_time,
+                'Success'
+            )
         elif msg[1] == 1 and cls_id != 0:
             self.lane_message.emit("우측 차선 변경 가능")
+            self.action_log_inserter.insert_action_log(
+                cls_id + 1,
+                4,
+                datetime.now(),
+                datetime.now() - obj_time,
+                'Success'
+            )
         elif cls_id in (10, 9, 8, 7):
             self.lane_message.emit("차선 변경 불가능")
+            self.action_log_inserter.insert_action_log(
+                cls_id + 1,
+                4,
+                datetime.now(),
+                datetime.now() - obj_time,
+                'Success'
+            )
         else:
             self.lane_message.emit("차선 변경 불가능")
 
-        # ✅ 2. 정지선 (거리 4.0m 이내만 처리)
+        # ✅ 2. 정지선 (거리 3.5m 이내만 처리)
         if msg[2] == 1:
             self.lane_dist = estimate_lane_distance(self.prev_lane_mask, 0.05)
-            if self.lane_dist is not None and self.lane_dist < 4.0 and cls_id == 9:
+            if self.lane_dist is not None and self.lane_dist < 3.5 and cls_id == 9:
                 self.state_message.emit("정지")
-            elif self.lane_dist is not None and self.lane_dist < 4.0:
+            elif self.lane_dist is not None and self.lane_dist < 3.5:
                 self.state_message.emit("주행 중")
 
-        # ✅ 3. 횡단보도 + 사람 (거리 4.0m 이내만 처리)
+        # ✅ 3. 횡단보도 + 사람 (거리 3.5m 이내만 처리)
         if msg[3] == 1:
             if cls_id == 3:
                 self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
-                if self.obj_dist is not None and self.obj_dist < 4.0:
+                if self.obj_dist is not None and self.obj_dist < 3.5:
                     self.alert_message.emit("횡단보도에 사람이 있습니다. 주의하세요.")
                     if self.obj_dist < 3.0:
                         self.state_message.emit("정지")
@@ -422,39 +478,39 @@ class VideoUpdateThread(QThread):
             elif cls_id != 3:
                 self.state_message.emit("주행 중")
 
-        # ✅ 4. 객체별 (거리 4.0m 이내만 메시지 업데이트)
+        # ✅ 4. 객체별 (거리 3.5m 이내만 메시지 업데이트)
         if cls_id == 0:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
-            if self.obj_dist is not None and self.obj_dist < 4.0:
+            if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.obj_message.emit(f"자동차 인식됨 (거리: {self.obj_dist:.2f}m)")
 
         elif cls_id == 1:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
-            if self.obj_dist is not None and self.obj_dist < 4.0:
+            if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.alert_message.emit("어린이 보호구역 - 주의")
                 self.obj_message.emit("어린이 보호구역")
 
         elif cls_id == 2:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
-            if self.obj_dist is not None and self.obj_dist < 4.0:
+            if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.alert_message.emit("공사장 근처 - 주의")
                 self.obj_message.emit("공사장")
 
         elif cls_id == 4:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
-            if self.obj_dist is not None and self.obj_dist < 4.0:
+            if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.alert_message.emit("30km/h 이하로 주행")
                 self.obj_message.emit("30km/h 속도제한 구간")
 
         elif cls_id == 5:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
-            if self.obj_dist is not None and self.obj_dist < 4.0:
+            if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.alert_message.emit("50km/h 이하로 주행")
                 self.obj_message.emit("50km/h 속도제한 구간")
 
         elif cls_id == 6:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
-            if self.obj_dist is not None and self.obj_dist < 4.0:
+            if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.obj_message.emit("정지 표지판 인식됨")
                 self.state_message.emit("정지")
                 QTimer.singleShot(5000, lambda: self.state_message.emit("주행 중"))
@@ -483,10 +539,22 @@ class VideoUpdateThread(QThread):
                 obj_uuid = obj_data[0]
                 obj_result = obj_data[1]
                 self.obj_class = obj_data[2]
+                position = obj_data[3]
+                confidence = obj_data[4]
+                bbox = obj_data[5]
                 obj_mask[obj_uuid] = obj_result
+                detected_time = datetime.now()
+                self.detected_object_inserter.insert_detected_object(
+                    self.session_id,
+                    self.obj_class+1,
+                    detected_time,
+                    confidence,
+                    bbox,
+                    position
+                )
 
             try:
-                self.update_msg(self.lane_msg, self.obj_class)
+                self.update_msg(self.lane_msg, self.obj_class, detected_time)
             except Exception as e:
                 print("update_msg 예외:", e)
 
