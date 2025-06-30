@@ -410,7 +410,6 @@ class VideoUpdateThread(QThread):
                 start_time=self.session_start_time,
                 end_time=None,
                 total_distance=0.0,
-                result_summary="{}"
             )
             print(f"Drive session started with ID: {self.session_id}")
         except Exception as e:
@@ -430,29 +429,26 @@ class VideoUpdateThread(QThread):
         if msg[0] == 1 and cls_id != 0:
             self.lane_message.emit("좌측 차선 변경 가능")
             self.action_log_inserter.insert_action_log(
-                cls_id + 1,
-                3,
+                cls_id,
+                5,
                 datetime.now(),
                 datetime.now() - obj_time,
-                'Success'
             )
         elif msg[1] == 1 and cls_id != 0:
             self.lane_message.emit("우측 차선 변경 가능")
             self.action_log_inserter.insert_action_log(
                 cls_id + 1,
-                4,
+                6,
                 datetime.now(),
                 datetime.now() - obj_time,
-                'Success'
             )
         elif cls_id in (10, 9, 8, 7):
             self.lane_message.emit("차선 변경 불가능")
             self.action_log_inserter.insert_action_log(
                 cls_id + 1,
-                4,
+                7,
                 datetime.now(),
                 datetime.now() - obj_time,
-                'Success'
             )
         else:
             self.lane_message.emit("차선 변경 불가능")
@@ -546,7 +542,7 @@ class VideoUpdateThread(QThread):
                 detected_time = datetime.now()
                 self.detected_object_inserter.insert_detected_object(
                     self.session_id,
-                    self.obj_class+1,
+                    self.obj_class,
                     detected_time,
                     confidence,
                     bbox,

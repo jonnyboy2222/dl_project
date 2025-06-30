@@ -36,15 +36,15 @@ class DriveSessionInserter:
     def __init__(self, db_connector):
         self.db_connector = db_connector
 
-    def insert_drive_session(self, start_time, end_time, total_distance, result_summary):
+    def insert_drive_session(self, start_time, end_time, total_distance):
         conn, cur = self.db_connector.get_connection()
 
         try:
             cur.execute(
                 """
-                INSERT INTO drive_session (start_time, end_time, total_distance, result_summary)
-                VALUES (%s, %s, %s, %s)
-                """, (start_time, end_time, total_distance, result_summary)
+                INSERT INTO drive_session (start_time, end_time, total_distance)
+                VALUES (%s, %s, %s)
+                """, (start_time, end_time, total_distance)
             )
             return cur.lastrowid
         except Exception as e:
@@ -135,14 +135,13 @@ class ActionLogInserter:
         try:
             cur.execute(
                 """
-                INSERT INTO action_log (object_id, action_type_id, performed_time, delay, result)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO action_log (object_id, action_type_id, performed_time, delay)
+                VALUES (%s, %s, %s, %s)
                 """, (
                 object_id,
                 action_type_id,
                 performed_time,
-                delay,
-                result
+                delay
             ))
             return cur.lastrowid
         except Exception as e:
