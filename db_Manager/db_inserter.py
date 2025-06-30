@@ -36,7 +36,7 @@ class DriveSessionInserter:
     def __init__(self, db_connector):
         self.db_connector = db_connector
 
-    def insert_drive_session(self, start_time, end_time, total_distance, result_summary):
+    def insert_drive_session(self, start_time, end_time, total_distance):
         conn, cur = self.db_connector.get_connection()
 
         try:
@@ -129,8 +129,7 @@ class ActionLogInserter:
                           object_id: int,
                           action_type_id: int,
                           performed_time,  # datetime 객체
-                          delay: float,
-                          result: str):
+                          delay: float):
         conn, cur = self.db_connector.get_connection()
         try:
             cur.execute(

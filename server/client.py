@@ -393,8 +393,6 @@ class VideoUpdateThread(QThread):
         # DB 삽입을 위한 데이터 수집
         self.session_id = None
         self.session_start_time = datetime.now()
-        self.detected_objects = []
-        self.action_logs = []
         self.total_distance = 0.0
 
         # DB 연결 및 inserter 초기화
@@ -404,6 +402,7 @@ class VideoUpdateThread(QThread):
         self.detected_object_inserter = DetectedObjectInserter(self.db_connector)
         self.action_log_inserter = ActionLogInserter(self.db_connector)
         self.drive_session_inserter = DriveSessionInserter(self.db_connector)
+        self.drive_session_updater = DriveSessionUpdater(self.db_connector)
 
         try:
             self.session_id = self.drive_session_inserter.insert_drive_session(
@@ -430,36 +429,55 @@ class VideoUpdateThread(QThread):
             self.lane_message.emit("좌측 차선 변경 가능")
             self.action_log_inserter.insert_action_log(
                 cls_id,
-                5,
+                6,
                 datetime.now(),
-                datetime.now() - obj_time,
+                (datetime.now()-obj_time).total_seconds()
             )
         elif msg[1] == 1 and cls_id != 0:
             self.lane_message.emit("우측 차선 변경 가능")
             self.action_log_inserter.insert_action_log(
-                cls_id + 1,
-                6,
+                cls_id,
+                7,
                 datetime.now(),
-                datetime.now() - obj_time,
+                (datetime.now()-obj_time).total_seconds()
             )
         elif cls_id in (10, 9, 8, 7):
             self.lane_message.emit("차선 변경 불가능")
             self.action_log_inserter.insert_action_log(
-                cls_id + 1,
-                7,
+                cls_id,
+                8,
                 datetime.now(),
-                datetime.now() - obj_time,
+                (datetime.now()-obj_time).total_seconds()
             )
         else:
             self.lane_message.emit("차선 변경 불가능")
+            self.action_log_inserter.insert_action_log(
+                cls_id,
+                8,
+                datetime.now(),
+                (datetime.now()-obj_time).total_seconds()
+            )
 
         # ✅ 2. 정지선 (거리 3.5m 이내만 처리)
         if msg[2] == 1:
             self.lane_dist = estimate_lane_distance(self.prev_lane_mask, 0.05)
             if self.lane_dist is not None and self.lane_dist < 3.5 and cls_id == 9:
                 self.state_message.emit("정지")
+                self.action_log_inserter.insert_action_log(
+                    cls_id,
+                    2,
+                    datetime.now(),
+                    (datetime.now()-obj_time).total_seconds()
+                )   
             elif self.lane_dist is not None and self.lane_dist < 3.5:
                 self.state_message.emit("주행 중")
+                self.action_log_inserter.insert_action_log(
+                    cls_id,
+                    0,
+                    datetime.now(),
+                    (datetime.now()-obj_time).total_seconds()
+                )
+
 
         # ✅ 3. 횡단보도 + 사람 (거리 3.5m 이내만 처리)
         if msg[3] == 1:
@@ -467,8 +485,20 @@ class VideoUpdateThread(QThread):
                 self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
                 if self.obj_dist is not None and self.obj_dist < 3.5:
                     self.alert_message.emit("횡단보도에 사람이 있습니다. 주의하세요.")
+                    self.action_log_inserter.insert_action_log(
+                        cls_id,
+                        1,
+                        datetime.now(),
+                        (datetime.now()-obj_time).total_seconds()
+                    ) 
                     if self.obj_dist < 3.0:
                         self.state_message.emit("정지")
+                        self.action_log_inserter.insert_action_log(
+                            cls_id,
+                            2,
+                            datetime.now(),
+                            (datetime.now()-obj_time).total_seconds()
+                        )    
                     else:
                         self.state_message.emit("주행 중")
             elif cls_id != 3:
@@ -479,36 +509,72 @@ class VideoUpdateThread(QThread):
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
             if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.obj_message.emit(f"자동차 인식됨 (거리: {self.obj_dist:.2f}m)")
+                self.action_log_inserter.insert_action_log(
+                    cls_id,
+                    1,
+                    datetime.now(),
+                    (datetime.now()-obj_time).total_seconds()
+                )
 
         elif cls_id == 1:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
             if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.alert_message.emit("어린이 보호구역 - 주의")
                 self.obj_message.emit("어린이 보호구역")
+                self.action_log_inserter.insert_action_log(
+                    cls_id,
+                    4,
+                    datetime.now(),
+                    (datetime.now()-obj_time).total_seconds()
+                )
 
         elif cls_id == 2:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
             if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.alert_message.emit("공사장 근처 - 주의")
                 self.obj_message.emit("공사장")
+                self.action_log_inserter.insert_action_log(
+                    cls_id,
+                    1,
+                    datetime.now(),
+                    (datetime.now()-obj_time).total_seconds()
+                )
 
         elif cls_id == 4:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
             if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.alert_message.emit("30km/h 이하로 주행")
                 self.obj_message.emit("30km/h 속도제한 구간")
+                self.action_log_inserter.insert_action_log(
+                    cls_id,
+                    4,
+                    datetime.now(),
+                    (datetime.now()-obj_time).total_seconds()
+                )
 
         elif cls_id == 5:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
             if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.alert_message.emit("50km/h 이하로 주행")
                 self.obj_message.emit("50km/h 속도제한 구간")
+                self.action_log_inserter.insert_action_log(
+                    cls_id,
+                    5,
+                    datetime.now(),
+                    (datetime.now()-obj_time).total_seconds()
+                )
 
         elif cls_id == 6:
             self.obj_dist = estimate_obj_distance(cls_id, self.prev_bbox)
             if self.obj_dist is not None and self.obj_dist < 3.5:
                 self.obj_message.emit("정지 표지판 인식됨")
                 self.state_message.emit("정지")
+                self.action_log_inserter.insert_action_log(
+                    cls_id,
+                    2,
+                    datetime.now(),
+                    (datetime.now()-obj_time).total_seconds()
+                )
                 QTimer.singleShot(5000, lambda: self.state_message.emit("주행 중"))
 
     def run(self):
@@ -601,6 +667,16 @@ class VideoUpdateThread(QThread):
             self.obj_dist = None
 
     def stop(self):
+        # drive_session table에 end_time, total_distance 내용 추가
+        session_end_time = datetime.now()
+        delta = session_end_time - self.session_start_time
+        self.total_distance = 0.3 * delta.total_seconds()
+        self.drive_session_updater.update_end_time_and_distance(
+            self.session_id,
+            session_end_time,
+            self.total_distance
+        )
+
         self.running = False
         self.quit()
         self.wait()
