@@ -36,7 +36,7 @@ class DriveSessionInserter:
     def __init__(self, db_connector):
         self.db_connector = db_connector
 
-    def insert_drive_session(self, start_time, end_time, total_distance):
+    def insert_drive_session(self, start_time, end_time, total_distance, result_summary):
         conn, cur = self.db_connector.get_connection()
 
         try:
@@ -135,15 +135,36 @@ class ActionLogInserter:
         try:
             cur.execute(
                 """
-                INSERT INTO action_log (object_id, action_type_id, performed_time, delay)
+                INSERT INTO action_log (object_id, action_type_id, performed_time, delay, result)
                 VALUES (%s, %s, %s, %s)
                 """, (
                 object_id,
                 action_type_id,
                 performed_time,
-                delay
+                delay,
             ))
             return cur.lastrowid
+        except Exception as e:
+            print(f"[DB ERROR] {e}")
+            raise
+        finally:
+            cur.close()
+            conn.close()
+
+class DriveSessionUpdater:
+    def __init__(self, db_connector):
+        self.db_connector = db_connector
+
+    def update_end_time_and_distance(self, session_id: int, end_time, total_distance: float):
+        conn, cur = self.db_connector.get_connection()
+        try:
+            cur.execute(
+                """
+                UPDATE drive_session
+                SET end_time = %s, total_distance = %s
+                WHERE id = %s
+                """, (end_time, total_distance, session_id)
+            )
         except Exception as e:
             print(f"[DB ERROR] {e}")
             raise
