@@ -61,7 +61,7 @@ class UdpSender():
         global original_latency_check
 
         # self.cap = cv2.VideoCapture(0)
-        self.cap = cv2.VideoCapture("/home/kth/Downloads/WIN_20250626_07_20_01_Pro.mp4")
+        self.cap = cv2.VideoCapture(0)
         
         try:
             if not self.cap.isOpened():
@@ -247,6 +247,21 @@ def receive_tcp_obj(server_ip, server_port, obj_tcp_queue: Queue):
         sock.close()
 
 def obj_result_worker(obj_tcp_queue, obj_result_queue, obj_latency_check):
+
+    color = {
+        "car": (0, 255, 0),
+        "child_protection": (255, 255, 0),
+        "construction": (255, 0, 0),
+        "person": (0, 0, 255),
+        "speed_limit_30": (0, 200, 255),
+        "speed_limit_50": (200, 0, 200),
+        "stop_sign": (0, 255, 255),
+        "veh_go": (255, 0, 255),
+        "veh_goLeft": (128, 0, 255),
+        "veh_stop": (0, 128, 255),
+        "veh_warning": (255, 128, 0),
+    }
+
     try:
         while True:
             if not obj_tcp_queue.empty():
@@ -275,18 +290,20 @@ def obj_result_worker(obj_tcp_queue, obj_result_queue, obj_latency_check):
                     bbox = (x1, y1, x2, y2)
                     confidence = obj_data['confidence']
                     class_name = obj_data.get('class_name', 'unknown')
+                    #print(type(class_name))
                     label = f"{class_name}"
-                    color = (0, 255, 0)
+                    # color = (0, 255, 0)
 
                     class_id = obj_data.get('class_id', -1)
                     distance = estimate_obj_distance(class_name, (x1,y1,x2,y2))
 
-
-                    cv2.rectangle(mask, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(mask, label, (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    class_id = obj_data.get('class_id', -1)
+                    distance = estimate_obj_distance(class_name, (x1,y1,x2,y2))
+                    if class_name != "unknown":
+                        cv2.rectangle(mask, (x1, y1), (x2, y2), color[class_name], 2)
+                        cv2.putText(mask, label, (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color[class_name], 2)
                     
-                
                 if not class_id == -1:
                     obj_result_queue.put((uuid, mask, class_id, confidence, bbox, distance))
                     # print("obj result : ", obj_result_queue.qsize())
@@ -298,23 +315,28 @@ def obj_result_worker(obj_tcp_queue, obj_result_queue, obj_latency_check):
         import traceback
         traceback.print_exc()
         return None
+    
+db_connector = DBConnector()
+detected_object_inserter = DetectedObjectInserter(db_connector)
+action_log_inserter = ActionLogInserter(db_connector)
+drive_session_inserter = DriveSessionInserter(db_connector)
+drive_session_updater = DriveSessionUpdater(db_connector)
 
 def db_insert_worker_task(db_task_data, db_queue, db_config):
     """단일 DB 작업을 처리하는 함수 (기존 db_insert_worker 로직)"""
     try:
         # DB 연결 및 inserter 초기화
-        db_connector = DBConnector()
-        detected_object_inserter = DetectedObjectInserter(db_connector)
-        action_log_inserter = ActionLogInserter(db_connector)
-        drive_session_inserter = DriveSessionInserter(db_connector)
-        drive_session_updater = DriveSessionUpdater(db_connector)
+        
         
         task_type = db_task_data[0]
         raw_data = db_task_data[1]
+        # print(raw_data)
+        # print("type:", task_type)
         
         # 데이터 변환 및 삽입
         if task_type == "detected_object":
             if raw_data['session_id'] != None:
+                #print("afdadsaf")
                 object_id = detected_object_inserter.insert_detected_object(
                     session_id=raw_data['session_id'],
                     object_type_id=raw_data['object_type_id'],
@@ -323,15 +345,18 @@ def db_insert_worker_task(db_task_data, db_queue, db_config):
                     bbox=raw_data['bbox'],
                     position=raw_data['position']
                 )
+                # print("queue insert")
                 db_config.put(object_id)
+                # print("queue insert success ", db_config.qsize())
         
         elif task_type == "action_log":
-            action_log_inserter.insert_action_log(
-                object_id=raw_data['object_id'],
-                action_type_id=raw_data['action_type_id'],
-                performed_time=raw_data['performed_time'],
-                delay=raw_data['delay'],
-            )
+            if raw_data['object_id'] != None:
+                action_log_inserter.insert_action_log(
+                    object_id=raw_data['object_id'],
+                    action_type_id=raw_data['action_type_id'],
+                    performed_time=raw_data['performed_time'],
+                    delay=raw_data['delay']
+                )
         
         elif task_type == "drive_session":
             session_id = drive_session_inserter.insert_drive_session(
@@ -340,6 +365,7 @@ def db_insert_worker_task(db_task_data, db_queue, db_config):
                 total_distance=raw_data['total_distance']
             )
             db_config.put(session_id)
+            # print(session_id)
         
         elif task_type == "update_session":
             drive_session_updater.update_end_time_and_distance(
@@ -350,14 +376,14 @@ def db_insert_worker_task(db_task_data, db_queue, db_config):
                     
     except Exception as e:
         print(f"[DB INSERT TASK ERROR] {e}")
-        import traceback
-        traceback.print_exc()
 
 def db_insert_worker_wrapper(db_queue, db_config):
     """db_insert_worker를 감싸서 None (sentinel) 값을 처리합니다."""
+    
     try:
         while True:
             task = db_queue.get()
+            # print(task[1])
             if task is None:
                 # print("[DB WORKER] Sentinel 값 수신, 종료합니다.")
                 break
@@ -366,9 +392,42 @@ def db_insert_worker_wrapper(db_queue, db_config):
             db_insert_worker_task(task, db_queue, db_config)
 
     except Exception as e:
-        print(f"[DB WRAPPER ERROR] {e}")
-        import traceback
-        traceback.print_exc()
+        #print(f"[DB WRAPPER ERROR] {e}")
+        pass
+
+def db_extactor(db_config, temp_queue, db_queue):
+    session_id = 0
+    while True:
+        if session_id == 0 and not db_config.empty():
+            
+            session_id = db_config.get_nowait()
+            print(f"[VideoUpdateThread] session_id 획득: {session_id}")
+        else:
+            pass
+            
+        if session_id != 0:
+            while not temp_queue.empty():
+                raw_data = temp_queue.get_nowait()
+
+                obj_class = raw_data[0]
+                detected_time = raw_data[1]
+                confidence = raw_data[2]
+                bbox = raw_data[3]
+                position = raw_data[4]
+
+
+                if session_id != None:
+                    # print(session_id)
+                    db_queue.put(("detected_object", {
+                        "session_id": session_id,
+                        "object_type_id": obj_class,
+                        "detected_time": detected_time,
+                        "confidence": confidence,
+                        "bbox": bbox,
+                        "position": position
+                    }))
+        
+        
 
 class WindowClass(QMainWindow, from_class):
     def __init__(self):
@@ -379,6 +438,8 @@ class WindowClass(QMainWindow, from_class):
 
         self.prev_lane_mask = None
         self.prev_obj_mask = None
+
+        
 
         self.video_thread = VideoUpdateThread(self.label_video_lane.width(), self.label_video_lane.height())
         # 예: MainWindow 클래스에서 VideoUpdateThread 객체를 생성 후 연결
@@ -413,16 +474,24 @@ class WindowClass(QMainWindow, from_class):
         self.obj_process.start()
 
         self.db_process = Process(target=db_insert_worker_wrapper,
-                                    args=(db_queue, db_config))
+                                   args=(db_queue, db_config))
         self.db_process.start()
+
+        self.db_extractor = Process(target=db_extactor,
+                                    args=(db_config, temp_queue, db_queue))
+        self.db_extractor.start()
+        
+        
 
         threading.Thread(target=self.udp_sender.send_frame, daemon=True).start()
 
+        
         db_queue.put(("drive_session", {
             "start_time": datetime.now(),
             "end_time": None,
             "total_distance": 0.0
         }))
+        
     
     def update_frame(self, pixmap: QPixmap):
         self.label_video_lane.setPixmap(pixmap)
@@ -481,6 +550,10 @@ class VideoUpdateThread(QThread):
         self.prev_lane_mask = None
         self.prev_bbox = None
         self.bbox = None
+        self.lane_vis = None
+        self.obj_vis = None
+        self.lane_mask = False
+        self.obj_mask = False
 
         # DB 삽입을 위한 데이터 수집
         self.session_id = None
@@ -494,66 +567,84 @@ class VideoUpdateThread(QThread):
             color_mask[mask == k] = color
         return color_mask
 
-    def update_msg(self, msg, cls_id, obj_time, obj_id, position=None):
+    def update_msg(self, msg, cls_id, obj_time, obj_id, position=None, lane_mask = None):
         if msg is None or cls_id is None:
             return
         
         #if position is not None and position < 20:
             #print("position : ", position)
-
-        # ✅ 1. 차선변경 여부 (수정하지 않음)
-        if msg[0] == 1 and cls_id != 0:
-            self.lane_message.emit("좌측 차선 변경 가능")
-            db_queue.put(("action_log", {
-                "object_id": obj_id,
-                "action_type_id": 6,
-                "performed_time": datetime.now(),
-                "delay": (datetime.now()-obj_time).total_seconds()
-            }))
-        elif msg[1] == 1 and cls_id != 0:
-            self.lane_message.emit("우측 차선 변경 가능")
-            db_queue.put(("action_log", {
-                "object_id": obj_id,
-                "action_type_id": 7,
-                "performed_time": datetime.now(),
-                "delay": (datetime.now()-obj_time).total_seconds()
-            }))
-        elif cls_id in (10, 9, 8, 7):
-            self.lane_message.emit("차선 변경 불가능")
-            db_queue.put(("action_log", {
-                "object_id": obj_id,
-                "action_type_id": 8,
-                "performed_time": datetime.now(),
-                "delay": (datetime.now()-obj_time).total_seconds()
-            }))
-        else:
-            self.lane_message.emit("차선 변경 불가능")
-            db_queue.put(("action_log", {
-                "object_id": obj_id,
-                "action_type_id": 8,
-                "performed_time": datetime.now(),
-                "delay": (datetime.now()-obj_time).total_seconds()
-            }))
-
-        # ✅ 2. 정지선 (거리 20m 이내만 처리)
-        if msg[2] == 1:
-            self.lane_dist = estimate_lane_distance(self.prev_lane_mask, 0.05)
-            if self.lane_dist is not None and self.lane_dist < 20 and cls_id == 9:
-                self.state_message.emit("정지")
+        if obj_id == 3 and position < 30:
+            QTimer.singleShot(5000, lambda: self.alert_message.emit("사람이 있습니다. 정지."))
+            QTimer.singleShot(5000, lambda: self.state_message.emit("정지"))
+            if obj_id is not None:
                 db_queue.put(("action_log", {
                     "object_id": obj_id,
                     "action_type_id": 2,
                     "performed_time": datetime.now(),
                     "delay": (datetime.now()-obj_time).total_seconds()
                 }))
-            elif self.lane_dist is not None and self.lane_dist < 20:
-                self.state_message.emit("주행 중")
+
+        # ✅ 1. 차선변경 여부 (수정하지 않음)
+        if msg[0] == 1 and cls_id != 0:
+            self.lane_message.emit("좌측 차선 변경 가능")
+            if obj_id is not None:
                 db_queue.put(("action_log", {
                     "object_id": obj_id,
-                    "action_type_id": 0,
+                    "action_type_id": 6,
                     "performed_time": datetime.now(),
                     "delay": (datetime.now()-obj_time).total_seconds()
                 }))
+        elif msg[1] == 1 and cls_id != 0:
+            self.lane_message.emit("우측 차선 변경 가능")
+            if obj_id is not None:
+                db_queue.put(("action_log", {
+                    "object_id": obj_id,
+                    "action_type_id": 7,
+                    "performed_time": datetime.now(),
+                    "delay": (datetime.now()-obj_time).total_seconds()
+                }))
+        elif cls_id in (10, 9, 8, 7):
+            self.lane_message.emit("차선 변경 불가능")
+            if obj_id is not None:
+                db_queue.put(("action_log", {
+                    "object_id": obj_id,
+                    "action_type_id": 8,
+                    "performed_time": datetime.now(),
+                    "delay": (datetime.now()-obj_time).total_seconds()
+                }))
+        else:
+            self.lane_message.emit("차선 변경 불가능")
+            if obj_id is not None:
+                db_queue.put(("action_log", {
+                    "object_id": obj_id,
+                    "action_type_id": 8,
+                    "performed_time": datetime.now(),
+                    "delay": (datetime.now()-obj_time).total_seconds()
+                }))
+
+        # ✅ 2. 정지선 (거리 20m 이내만 처리)
+        if msg[2] == 1:
+            self.lane_dist = estimate_lane_distance(lane_mask, 0.05)
+            # print("lane_dist : ", self.lane_dist)
+            if self.lane_dist is not None:
+                if cls_id == 9 and self.lane_dist < 3:
+                    self.state_message.emit("정지")
+                    if obj_id is not None:
+                        db_queue.put(("action_log", {
+                            "object_id": obj_id,
+                            "action_type_id": 2,
+                            "performed_time": datetime.now(),
+                            "delay": (datetime.now()-obj_time).total_seconds()
+                        }))
+                elif self.lane_dist > 3:
+                    self.state_message.emit("주행 중")
+                    if obj_id is not None:
+                        db_queue.put(("action_log", {
+                            "object_id": obj_id,
+                            "action_type_id": 0,
+                            "performed_time": datetime.now(),
+                            "delay": (datetime.now()-obj_time).total_seconds()
+                        }))
 
 
         # ✅ 3. 횡단보도 + 사람 (거리 20m 이내만 처리)
@@ -562,22 +653,24 @@ class VideoUpdateThread(QThread):
                 self.obj_dist = position
                 if self.obj_dist is not None and self.obj_dist < 40:
                     self.alert_message.emit("횡단보도에 사람이 있습니다. 주의하세요.")
-                    db_queue.put(("action_log", {
-                        "object_id": obj_id,
-                        "action_type_id": 1,
-                        "performed_time": datetime.now(),
-                        "delay": (datetime.now()-obj_time).total_seconds()
-                    }))
-                    if self.obj_dist < 20:
-                        self.state_message.emit("정지")
+                    if obj_id is not None:
                         db_queue.put(("action_log", {
                             "object_id": obj_id,
-                            "action_type_id": 2,
+                            "action_type_id": 1,
                             "performed_time": datetime.now(),
                             "delay": (datetime.now()-obj_time).total_seconds()
                         }))
-                    else:
-                        self.state_message.emit("주행 중")
+                    if self.obj_dist < 30:
+                        self.state_message.emit("정지")
+                        if obj_id is not None:
+                            db_queue.put(("action_log", {
+                                "object_id": obj_id,
+                                "action_type_id": 2,
+                                "performed_time": datetime.now(),
+                                "delay": (datetime.now()-obj_time).total_seconds()
+                            }))
+                else:
+                    self.state_message.emit("주행 중")
             elif cls_id != 3:
                 self.state_message.emit("주행 중")
 
@@ -586,92 +679,87 @@ class VideoUpdateThread(QThread):
             self.obj_dist = position
             if self.obj_dist is not None and self.obj_dist < 20:
                 self.obj_message.emit(f"자동차 인식됨 (거리: {self.obj_dist:.2f}m)")
-                db_queue.put(("action_log", {
-                    "object_id": obj_id,
-                    "action_type_id": 1,
-                    "performed_time": datetime.now(),
-                    "delay": (datetime.now()-obj_time).total_seconds()
-                }))
+                if obj_id is not None:
+                    db_queue.put(("action_log", {
+                        "object_id": obj_id,
+                        "action_type_id": 1,
+                        "performed_time": datetime.now(),
+                        "delay": (datetime.now()-obj_time).total_seconds()
+                    }))
 
         elif cls_id == 1:
             self.obj_dist = position
             if self.obj_dist is not None and self.obj_dist < 30:
                 self.alert_message.emit("어린이 보호구역 - 주의")
                 self.obj_message.emit("어린이 보호구역")
-                db_queue.put(("action_log", {
-                    "object_id": obj_id,
-                    "action_type_id": 4,
-                    "performed_time": datetime.now(),
-                    "delay": (datetime.now()-obj_time).total_seconds()
-                }))
+                if obj_id is not None:
+                    db_queue.put(("action_log", {
+                        "object_id": obj_id,
+                        "action_type_id": 4,
+                        "performed_time": datetime.now(),
+                        "delay": (datetime.now()-obj_time).total_seconds()
+                    }))
 
         elif cls_id == 2:
             self.obj_dist = position
             if self.obj_dist is not None and self.obj_dist < 20:
                 self.alert_message.emit("공사장 근처 - 주의")
                 self.obj_message.emit("공사장")
-                db_queue.put(("action_log", {
-                    "object_id": obj_id,
-                    "action_type_id": 1,
-                    "performed_time": datetime.now(),
-                    "delay": (datetime.now()-obj_time).total_seconds()
-                }))
+                if obj_id is not None:
+                    db_queue.put(("action_log", {
+                        "object_id": obj_id,
+                        "action_type_id": 1,
+                        "performed_time": datetime.now(),
+                        "delay": (datetime.now()-obj_time).total_seconds()
+                    }))
 
         elif cls_id == 4:
             self.obj_dist = position
             if self.obj_dist is not None and self.obj_dist < 30:
                 self.alert_message.emit("30km/h 이하로 주행")
                 self.obj_message.emit("30km/h 속도제한 구간")
-                db_queue.put(("action_log", {
-                    "object_id": obj_id,
-                    "action_type_id": 4,
-                    "performed_time": datetime.now(),
-                    "delay": (datetime.now()-obj_time).total_seconds()
-                }))
+                if obj_id is not None:
+                    db_queue.put(("action_log", {
+                        "object_id": obj_id,
+                        "action_type_id": 4,
+                        "performed_time": datetime.now(),
+                        "delay": (datetime.now()-obj_time).total_seconds()
+                    }))
 
         elif cls_id == 5:
             self.obj_dist = position
             if self.obj_dist is not None and self.obj_dist < 30:
                 self.alert_message.emit("50km/h 이하로 주행")
                 self.obj_message.emit("50km/h 속도제한 구간")
-                db_queue.put(("action_log", {
-                    "object_id": obj_id,
-                    "action_type_id": 5,
-                    "performed_time": datetime.now(),
-                    "delay": (datetime.now()-obj_time).total_seconds()
-                }))
+                if obj_id is not None:
+                    db_queue.put(("action_log", {
+                        "object_id": obj_id,
+                        "action_type_id": 5,
+                        "performed_time": datetime.now(),
+                        "delay": (datetime.now()-obj_time).total_seconds()
+                    }))
 
         elif cls_id == 6:
             self.obj_dist = position
             if self.obj_dist is not None and self.obj_dist < 20:
                 self.obj_message.emit("정지 표지판 인식됨")
                 self.state_message.emit("정지")
-                db_queue.put(("action_log", {
-                    "object_id": obj_id,
-                    "action_type_id": 2,
-                    "performed_time": datetime.now(),
-                    "delay": (datetime.now()-obj_time).total_seconds()
-                }))
+                if obj_id is not None:
+                    db_queue.put(("action_log", {
+                        "object_id": obj_id,
+                        "action_type_id": 2,
+                        "performed_time": datetime.now(),
+                        "delay": (datetime.now()-obj_time).total_seconds()
+                    }))
                 QTimer.singleShot(5000, lambda: self.state_message.emit("주행 중"))
 
     def run(self):
-        '''
-        try:
-            # `session_id`를 받기 전까지 여기서 대기합니다.
-            self.session_id = db_config.get(timeout=15)
-            # print(f"[VideoUpdateThread] Session ID {self.session_id} 획득")
-        except queue.Empty:
-            print("[VideoUpdateThread] 세션 ID를 시간 내에 받지 못했습니다. 스레드를 종료합니다.")
-            self.running = False
-            return
-        '''
-            
         while self.running:
             now = time.time()
-
-            if not db_config.empty():
-                self.session_id = db_config.get_nowait()
-                print(self.session_id)
+            # print(db_config.qsize())
+            # if not db_config.empty():
+            #     self.session_id = db_config.get_nowait()
+            #     print(f"[VideoUpdateThread] session_id 획득: {self.session_id}")
 
             # 프레임 수신
             if not udp_video_queue.empty():
@@ -697,20 +785,18 @@ class VideoUpdateThread(QThread):
                 confidence = obj_data[3]
                 self.bbox = obj_data[4]
                 position = obj_data[5]
+                self.detected_time = datetime.now()
+
+                temp_queue.put([self.obj_class, self.detected_time, confidence, self.bbox, position])
+                # ======================================================================
+                # print("temp_queue.qsize() : ", temp_queue.qsize())
                 # print(self.bbox)
                 # position = estimate_obj_distance(self.obj_class, self.bbox)
                 obj_mask[obj_uuid] = obj_result
-                self.detected_time = datetime.now()
+                
                 #print(self.obj_class)
                 #print(type(self.obj_class))
-                db_queue.put(("detected_object", {
-                    "session_id": self.session_id,
-                    "object_type_id": self.obj_class,
-                    "detected_time": self.detected_time,
-                    "confidence": confidence,
-                    "bbox": self.bbox,
-                    "position": position
-                }))
+                
 
             try:
                 while self.object_id is None:
@@ -718,13 +804,16 @@ class VideoUpdateThread(QThread):
                         self.object_id = db_config.get_nowait()
                         #print(self.object_id)
                         break
+                    else:
+                        break
                 
                 if self.bbox is not None:
-                    self.update_msg(self.lane_msg, self.obj_class, self.detected_time, self.object_id, position)
+                    self.update_msg(self.lane_msg, self.obj_class, self.detected_time, self.object_id, position, lane_result)
                 else:
-                    self.update_msg(self.lane_msg, self.obj_class, self.detected_time, self.object_id)
+                    self.update_msg(self.lane_msg, self.obj_class, self.detected_time, self.object_id, lane_result)
             except Exception as e:
-                print("update_msg 예외:", e)
+                # print("update_msg 예외:", e)
+                pass
 
             ready_uuids = sorted(orig_frame.keys())
             for uuid in ready_uuids:
@@ -744,18 +833,29 @@ class VideoUpdateThread(QThread):
                 lane = lane_mask.pop(uuid, None)
                 obj = obj_mask.pop(uuid, None)
 
+                # 차선 마스크 컬러화
                 if lane is not None and len(lane.shape) == 2:
                     try:
-                        lane = self.colorize_mask_lane(lane)
-                        frame = cv2.addWeighted(frame, 0.7, lane, 0.3, 0.0)
+                        lane_vis = self.colorize_mask_lane(lane)
+                        self.lane_mask = True
                     except Exception:
                         pass
-
+                # 객체 마스크는 그대로 사용 (BGR 이미지라고 가정)
                 if obj is not None:
                     try:
-                        frame = cv2.addWeighted(frame, 0.7, obj, 0.3, 0.0)
+                        obj_vis = obj.copy()
+                        self.obj_mask = True
                     except Exception:
                         pass
+                # 마스크 합성
+                if self.lane_mask and self.obj_mask:
+                    combined_mask = cv2.addWeighted(lane_vis, 0.4, obj_vis, 0.6, 0.0)
+                    frame = cv2.addWeighted(frame, 0.75, combined_mask, 0.25, 0.0)
+                elif self.lane_mask:
+                    frame = cv2.addWeighted(frame, 0.8, lane_vis, 0.2, 0.0)
+                elif self.obj_mask:
+                    frame = cv2.addWeighted(frame, 0.8, obj_vis, 0.2, 0.0)
+                # else: 아무것도 안함
 
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_frame.shape
@@ -772,7 +872,10 @@ class VideoUpdateThread(QThread):
 
             self.lane_dist = None
             self.obj_dist = None
-
+            self.lane_mask = False
+            self.obj_mask = False
+            self.object_id = None
+    
     def stop(self):
         # drive_session table에 end_time, total_distance 내용 추가
         session_end_time = datetime.now()
@@ -806,6 +909,8 @@ if __name__ == "__main__":
 
     db_queue = manager.Queue()
     db_config = manager.Queue()
+
+    temp_queue = manager.Queue()
 
     df_orig = pd.DataFrame.from_dict(original_latency_check, orient='index')
     df_lane = pd.DataFrame.from_dict(lane_latency_check, orient='index')
