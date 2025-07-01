@@ -134,8 +134,9 @@ class ActionLogInserter:
         try:
             cur.execute(
                 """
-                INSERT INTO action_log (object_id, action_type_id, performed_time, delay, result)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO action_log (object_id, action_type_id, performed_time, delay)
+                VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE 
+                performed_time = VALUES(performed_time), delay = VALUES(delay)
                 """, (
                 object_id,
                 action_type_id,
