@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>574</width>
+    <width>576</width>
     <height>730</height>
    </rect>
   </property>
@@ -62,8 +62,41 @@
         <pointsize>15</pointsize>
         <weight>75</weight>
         <bold>true</bold>
-        <strikeout>true</strikeout>
-        <kerning>false</kerning>
+        <strikeout>false</strikeout>
+        <kerning>true</kerning>
+       </font>
+      </property>
+      <property name="frameShape">
+       <enum>QFrame::Box</enum>
+      </property>
+      <property name="lineWidth">
+       <number>4</number>
+      </property>
+      <property name="text">
+       <string/>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="label">
+      <property name="font">
+       <font>
+        <pointsize>15</pointsize>
+        <italic>true</italic>
+       </font>
+      </property>
+      <property name="text">
+       <string>Lane Msg</string>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="label_msg_lane">
+      <property name="font">
+       <font>
+        <pointsize>15</pointsize>
+        <weight>75</weight>
+        <bold>true</bold>
        </font>
       </property>
       <property name="frameShape">
@@ -97,8 +130,8 @@
         <pointsize>15</pointsize>
         <weight>75</weight>
         <bold>true</bold>
-        <strikeout>true</strikeout>
-        <kerning>false</kerning>
+        <strikeout>false</strikeout>
+        <kerning>true</kerning>
        </font>
       </property>
       <property name="frameShape">
@@ -127,32 +160,13 @@
     </item>
     <item>
      <widget class="QLabel" name="label_msg_obj">
-      <property name="frameShape">
-       <enum>QFrame::Box</enum>
-      </property>
-      <property name="lineWidth">
-       <number>4</number>
-      </property>
-      <property name="text">
-       <string/>
-      </property>
-     </widget>
-    </item>
-    <item>
-     <widget class="QLabel" name="label">
       <property name="font">
        <font>
         <pointsize>15</pointsize>
-        <italic>true</italic>
+        <weight>75</weight>
+        <bold>true</bold>
        </font>
       </property>
-      <property name="text">
-       <string>Lane Msg</string>
-      </property>
-     </widget>
-    </item>
-    <item>
-     <widget class="QLabel" name="label_msg_lane">
       <property name="frameShape">
        <enum>QFrame::Box</enum>
       </property>
